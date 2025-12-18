@@ -102,9 +102,19 @@ def suggest_portion(name: str):
     return None
 
 
-def _count(conn, q: str, params=()) -> int:
-    row = conn.execute(q, params).fetchone()
-    return int(list(row)[0]) if row else 0
+def _count(conn, sql):
+    cur = conn.execute(sql)
+    row = cur.fetchone()
+    if not row:
+        return 0
+
+    # postgres (dict_row)
+    if isinstance(row, dict):
+        return int(next(iter(row.values())))
+
+    # sqlite (tuple)
+    return int(row[0])
+
 
 async def cmd_admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if await deny_if_not_admin(update):
@@ -547,6 +557,7 @@ def execute_ddl(conn, sql: str) -> None:
         conn.execute(s)
     else:
         conn.execute(sql)
+
 
 def init_db() -> None:
     with db() as conn:
