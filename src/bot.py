@@ -4,6 +4,7 @@ import base64
 import os
 import sqlite3
 import psycopg
+from psycopg.rows import dict_row
 import json
 import sqlite3
 import re
@@ -34,7 +35,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
 DATABASE_URL = os.getenv("DATABASE_URL")
 DB_PATH="nutri.db"
 ADMIN_IDS = {int(x) for x in (os.getenv("ADMIN_IDS") or "").split(",") if x.isdigit()}
-BOT_USERNAME = os.getenv("@nutri_helper_ai_bot")
+BOT_USERNAME = os.getenv("BOT_USERNAME") or "@nutri_helper_ai_bot"
 # кому слать сообщения "создателю"
 CREATOR_ID = None
 if ADMIN_IDS:
@@ -247,15 +248,27 @@ async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if row:
             req_id = int(row["id"])
         else:
-            cur = conn.execute(
-                """
-                insert into payment_requests(user_id, status, plan, amount, currency, created_at)
-                values (?, 'pending', ?, ?, ?, ?)
-                """,
-                (uid, "monthly", 29.0, "BRL", now),
-            )
-            req_id = int(cur.lastrowid)
-            conn.commit()
+            kind = getattr(conn, "_db_kind", "")
+            if kind == "postgres":
+                row2 = conn.execute(
+                    """
+                    insert into payment_requests(user_id, status, plan, amount, currency, created_at, updated_at)
+                    values (%s, 'pending', %s, %s, %s, %s, %s)
+                    returning id
+                    """,
+                    (uid, "monthly", 59.0, "BRL", now, now),
+                ).fetchone()
+                req_id = int(row2["id"]) if row2 else 0
+            else:
+                cur = conn.execute(
+                    """
+                    insert into payment_requests(user_id, status, plan, amount, currency, created_at, updated_at)
+                    values (?, 'pending', ?, ?, ?, ?, ?)
+                    """,
+                    (uid, "monthly", 59.0, "BRL", now, now),
+                )
+                req_id = int(cur.lastrowid)
+                conn.commit()
 
     await update.effective_message.reply_text(
         "Чтобы бот работал дальше, нужна подписка.\n\n"
@@ -383,10 +396,10 @@ async def cmd_paid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         conn.execute(
             """
             update payment_requests
-            set status='paid', paid_at=?, admin_note=?
+            set status='paid', paid_at=?, admin_note=?, updated_at=?
             where id=?
             """,
-            (now, f"approved by admin {update.effective_user.id}", req_id),
+            (now, f"approved by admin {update.effective_user.id}", now, req_id),
         )
         conn.commit()
 
@@ -446,27 +459,98 @@ def unit_to_ru(unit: str) -> str:
 # db
 # =====================
 
+def _adapt_qmarks(sql: str) -> str:
+    """Replace sqlite-style '?' placeholders with psycopg-style '%s' (outside quotes)."""
+    out = []
+    in_s = False
+    in_d = False
+    esc = False
+    for ch in sql:
+        if ch == "\\" and (in_s or in_d) and not esc:
+            esc = True
+            out.append(ch)
+            continue
+        if ch == "'" and not in_d and not esc:
+            in_s = not in_s
+        elif ch == '"' and not in_s and not esc:
+            in_d = not in_d
+
+        if ch == "?" and not in_s and not in_d:
+            out.append("%s")
+        else:
+            out.append(ch)
+
+        esc = False
+    return "".join(out)
+
+
 def db():
     database_url = os.getenv("DATABASE_URL")
 
     if database_url:
         # postgres (prod)
         conn = psycopg.connect(database_url)
+        conn.row_factory = dict_row
+        conn._db_kind = "postgres"  # internal flag
+
+        _orig_execute = conn.execute
+
+        def _execute(sql, params=None):
+            sql2 = _adapt_qmarks(sql) if isinstance(sql, str) else sql
+            if params is None:
+                return _orig_execute(sql2)
+            return _orig_execute(sql2, params)
+
+        # monkeypatch for compatibility with existing sqlite-style code
+        conn.execute = _execute
         return conn
     else:
         # sqlite (local dev)
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
+        conn._db_kind = "sqlite"  # internal flag
         return conn
 
-def ensure_column(conn: sqlite3.Connection, table: str, col: str, col_type: str) -> None:
-    cols = [r["name"] for r in conn.execute(f"pragma table_info({table})").fetchall()]
-    if col not in cols:
-        conn.execute(f"alter table {table} add column {col} {col_type}")
+
+def ensure_column(conn, table: str, col: str, col_type: str) -> None:
+    """Add column if it doesn't exist (works for sqlite and postgres)."""
+    kind = getattr(conn, "_db_kind", "")
+    if kind == "postgres":
+        row = conn.execute(
+            """
+            select 1
+            from information_schema.columns
+            where table_schema = 'public' and table_name = %s and column_name = %s
+            limit 1
+            """,
+            (table, col),
+        ).fetchone()
+        if not row:
+            conn.execute(f"alter table {table} add column {col} {col_type}")
+    else:
+        cols = [r["name"] for r in conn.execute(f"pragma table_info({table})").fetchall()]
+        if col not in cols:
+            conn.execute(f"alter table {table} add column {col} {col_type}")
+
+
+def execute_ddl(conn, sql: str) -> None:
+    """Execute DDL in a way that works on both sqlite and postgres."""
+    kind = getattr(conn, "_db_kind", "")
+    if kind == "postgres":
+        s = sql
+        s = re.sub(r"\binteger\s+primary\s+key\s+autoincrement\b", "bigserial primary key", s, flags=re.IGNORECASE)
+        s = re.sub(r"\bid\s+integer\s+primary\s+key\b", "id bigserial primary key", s, flags=re.IGNORECASE)
+        s = re.sub(r"\buser_id\s+integer\s+primary\s+key\b", "user_id bigint primary key", s, flags=re.IGNORECASE)
+        s = re.sub(r"\buser_id\s+integer\s+not\s+null\b", "user_id bigint not null", s, flags=re.IGNORECASE)
+        s = re.sub(r"\buser_id\s+integer\b", "user_id bigint", s, flags=re.IGNORECASE)
+        s = re.sub(r"\bautoincrement\b", "", s, flags=re.IGNORECASE)
+        conn.execute(s)
+    else:
+        conn.execute(sql)
 
 def init_db() -> None:
     with db() as conn:
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists users (
             user_id integer primary key,
             created_at text not null,
@@ -489,7 +573,7 @@ def init_db() -> None:
 
         ensure_column(conn, "users", "primary_issues_json", "text")
 
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists rate_limits (
             user_id integer not null,
             bucket text not null,          -- например 'ai_min', 'ai_day'
@@ -499,9 +583,9 @@ def init_db() -> None:
             primary key(user_id, bucket)
         )
         """)
-        conn.execute("create index if not exists idx_rate_limits_bucket on rate_limits(bucket)")
+        execute_ddl(conn, "create index if not exists idx_rate_limits_bucket on rate_limits(bucket)")
 
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists entries (
             id integer primary key autoincrement,
             user_id integer not null,
@@ -521,9 +605,9 @@ def init_db() -> None:
             created_at text not null
         )
         """)
-        conn.execute("create index if not exists idx_entries_user_date on entries(user_id, entry_date)")
+        execute_ddl(conn, "create index if not exists idx_entries_user_date on entries(user_id, entry_date)")
 
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists daily_summaries (
             id integer primary key autoincrement,
             user_id integer not null,
@@ -537,9 +621,9 @@ def init_db() -> None:
             unique(user_id, entry_date)
         )
         """)
-        conn.execute("create index if not exists idx_daily_summaries_user_date on daily_summaries(user_id, entry_date)")
+        execute_ddl(conn, "create index if not exists idx_daily_summaries_user_date on daily_summaries(user_id, entry_date)")
 
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists weekly_summaries (
             id integer primary key autoincrement,
             user_id integer not null,
@@ -556,10 +640,10 @@ def init_db() -> None:
             unique(user_id, start_date, end_date)
         )
         """)
-        conn.execute("create index if not exists idx_weekly_summaries_user_range on weekly_summaries(user_id, start_date, end_date)")
+        execute_ddl(conn, "create index if not exists idx_weekly_summaries_user_range on weekly_summaries(user_id, start_date, end_date)")
 
         # подписка
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists subscriptions (
             user_id integer primary key,
             status text not null,              -- 'active' | 'inactive'
@@ -570,7 +654,7 @@ def init_db() -> None:
         """)
 
         # словарь пользователя
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists food_aliases (
             id integer primary key autoincrement,
             user_id integer not null,
@@ -584,10 +668,10 @@ def init_db() -> None:
             unique(user_id, alias_text)
         )
         """)
-        conn.execute("create index if not exists idx_food_aliases_user on food_aliases(user_id)")
+        execute_ddl(conn, "create index if not exists idx_food_aliases_user on food_aliases(user_id)")
 
         # targets (дневные цели)
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists targets (
             user_id integer primary key,
             kcal real,
@@ -607,7 +691,7 @@ def init_db() -> None:
 
         ensure_column(conn, "entries", "fiber", "real")
 
-        conn.execute("""
+        execute_ddl(conn, """
         create table if not exists payment_requests (
             id integer primary key autoincrement,
             user_id integer not null,
@@ -616,6 +700,7 @@ def init_db() -> None:
             amount real,
             currency text,
             created_at text not null,
+            updated_at text not null,
             paid_at text,
             admin_note text
         )
@@ -623,10 +708,11 @@ def init_db() -> None:
         ensure_column(conn, "payment_requests", "proof_text", "text")
         ensure_column(conn, "payment_requests", "proof_file_id", "text")
         ensure_column(conn, "payment_requests", "paid_at", "text")
+        ensure_column(conn, "payment_requests", "updated_at", "text")
         ensure_column(conn, "payment_requests", "admin_note", "text")
 
-        conn.execute("create index if not exists idx_payment_requests_user on payment_requests(user_id)")
-        conn.execute("create index if not exists idx_payment_requests_status on payment_requests(status)")
+        execute_ddl(conn, "create index if not exists idx_payment_requests_user on payment_requests(user_id)")
+        execute_ddl(conn, "create index if not exists idx_payment_requests_status on payment_requests(status)")
 
         conn.commit()
 
