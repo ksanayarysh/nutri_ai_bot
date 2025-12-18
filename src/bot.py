@@ -102,8 +102,8 @@ def suggest_portion(name: str):
     return None
 
 
-def _count(conn, sql):
-    cur = conn.execute(sql)
+def _count(conn, sql, params=None):
+    cur = conn.execute(sql, params or ())
     row = cur.fetchone()
     if not row:
         return 0
