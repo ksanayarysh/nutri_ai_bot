@@ -40,6 +40,13 @@ CREATOR_ID = None
 if ADMIN_IDS:
     CREATOR_ID = sorted(ADMIN_IDS)[0]  # первый админ
 
+MEAL_ALIASES = {
+    "завтрак": "breakfast",
+    "обед": "lunch",
+    "ужин": "dinner",
+    "перекус": "snack",
+    "другое": "other",
+}
 
 PRICE_TEXT = "59 BRL / месяц"   # поменяй
 PAYMENT_INSTRUCTIONS = (
@@ -156,6 +163,24 @@ def pay_keyboard(req_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("я оплатил(а)", callback_data=f"paidproof:{req_id}")],
         [InlineKeyboardButton("проверить подписку", callback_data="substatus")],
     ])
+
+def extract_meal_prefix(text: str):
+    if ":" not in text:
+        return None, text
+
+    left, right = text.split(":", 1)
+    meal_raw = left.strip().lower()
+    food_text = right.strip()
+
+    meal = MEAL_ALIASES.get(meal_raw)
+    if not meal:
+        return None, text
+
+    if not food_text:
+        return meal, ""
+
+    return meal, food_text
+
 
 def user_provided_qty(text: str) -> bool:
     if not text:
@@ -3713,7 +3738,13 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if consumed:
             return
 
-    meal = infer_meal_by_time(datetime.now(TZ))
+    explicit_meal, text = extract_meal_prefix(text)
+
+    if explicit_meal:
+        meal = explicit_meal
+    else:
+        meal = infer_meal_by_time(datetime.now(TZ))
+
     await handle_log(update, context, u, meal, text)
 
 # === весь код сохранён, изменения помечены комментариями "# UX" ===
