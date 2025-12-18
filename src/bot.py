@@ -2,7 +2,6 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import CallbackQueryHandler
 import base64
 import os
-import sqlite3
 import psycopg
 from psycopg.rows import dict_row
 import json
@@ -72,6 +71,66 @@ def is_admin(uid: int) -> bool:
     if not ADMIN_IDS:
         return False
     return uid in ADMIN_IDS
+
+
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
+
+def _safe_tb(e: Exception) -> str:
+    # ограничим длину, чтобы telegram не зарезал сообщение
+    tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+    return tb[-3500:]  # лимит ~4096, оставим запас
+
+async def global_error_handler(update, context):
+    err = context.error
+    logger.error("Unhandled exception", exc_info=err)
+
+    # 1) пользователю (мягко)
+    try:
+        if update and update.effective_chat:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=(
+                    "Произошла ошибка и мне очень даль 😔\n"
+                    "Я уже записала детали и починю.\n"
+                    "Попробуй ещё раз через минуту или напиши автору бота /contact."
+                ),
+            )
+    except Exception:
+        pass
+
+    # 2) админу (жёстко и информативно)
+    try:
+        chat_id = getattr(update.effective_chat, "id", None) if update else None
+        user_id = getattr(update.effective_user, "id", None) if update else None
+        username = getattr(update.effective_user, "username", None) if update else None
+        text = getattr(getattr(update, "message", None), "text", None) if update else None
+        cb_data = getattr(getattr(update, "callback_query", None), "data", None) if update else None
+
+        meta = (
+            f"chat_id={chat_id}\n"
+            f"user_id={user_id}\n"
+            f"username=@{username}\n" if username else f"username=None\n"
+        )
+        payload = f"message_text={text}\n" if text else (f"callback_data={cb_data}\n" if cb_data else "payload=None\n")
+
+        tb = _safe_tb(err)
+
+        admin_msg = (
+            "🚨 bot error\n"
+            f"{meta}"
+            f"{payload}"
+            "\ntraceback:\n"
+            f"{tb}"
+        )
+
+        for admin_id in ADMIN_IDS:
+            await context.bot.send_message(chat_id=admin_id, text=admin_msg)
+    except Exception:
+        # если даже отправка админу упала, хотя бы в логи
+        logger.exception("Failed to notify admin about error")
 
 def pay_keyboard(req_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -3789,6 +3848,8 @@ def main() -> None:
     init_db()
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    app.add_error_handler(global_error_handler)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
