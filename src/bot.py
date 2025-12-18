@@ -2,6 +2,8 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import CallbackQueryHandler
 import base64
 import os
+import sqlite3
+import psycopg
 import json
 import sqlite3
 import re
@@ -29,7 +31,8 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
-DB_PATH = os.getenv("DB_PATH") or "nutri.db"
+DATABASE_URL = os.getenv("DATABASE_URL")
+DB_PATH="nutri.db"
 ADMIN_IDS = {int(x) for x in (os.getenv("ADMIN_IDS") or "").split(",") if x.isdigit()}
 BOT_USERNAME = os.getenv("@nutri_helper_ai_bot")
 # кому слать сообщения "создателю"
@@ -443,10 +446,18 @@ def unit_to_ru(unit: str) -> str:
 # db
 # =====================
 
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def db():
+    database_url = os.getenv("DATABASE_URL")
+
+    if database_url:
+        # postgres (prod)
+        conn = psycopg.connect(database_url)
+        return conn
+    else:
+        # sqlite (local dev)
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def ensure_column(conn: sqlite3.Connection, table: str, col: str, col_type: str) -> None:
     cols = [r["name"] for r in conn.execute(f"pragma table_info({table})").fetchall()]
