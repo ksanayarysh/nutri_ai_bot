@@ -90,6 +90,26 @@ def _safe_tb(e: Exception) -> str:
     tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
     return tb[-3500:]  # лимит ~4096, оставим запас
 
+
+async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not CREATOR_ID:
+        return
+
+    chat = update.effective_chat
+    for m in (update.message.new_chat_members or []):
+        name = " ".join(x for x in [m.first_name, m.last_name] if x) or (m.username or str(m.id))
+        uname = f"@{m.username}" if m.username else "no username"
+
+        await context.bot.send_message(
+            chat_id=CREATOR_ID,
+            text=(
+                "👤 Новый участник\n"
+                f"Чат: {chat.title or chat.id}\n"
+                f"User: {name} ({uname})\n"
+                f"User id: {m.id}"
+            )
+        )
+
 from telegram.error import NetworkError, TimedOut, RetryAfter
 
 from telegram.ext import ContextTypes
@@ -3915,6 +3935,10 @@ def main() -> None:
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_error_handler(global_error_handler)
+
+    from telegram.ext import MessageHandler, filters
+
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_members))
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
