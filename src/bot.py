@@ -83,9 +83,28 @@ def _safe_tb(e: Exception) -> str:
     tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
     return tb[-3500:]  # лимит ~4096, оставим запас
 
-async def global_error_handler(update, context):
+from telegram.error import NetworkError, TimedOut, RetryAfter
+
+from telegram.ext import ContextTypes
+
+async def global_error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
     err = context.error
-    logger.error("Unhandled exception", exc_info=err)
+
+    # network noise: polling sometimes fails, ptb will retry
+    if isinstance(err, (NetworkError, TimedOut, RetryAfter)):
+        logger.warning("Network/telegram transient error: %s", repr(err))
+        return
+
+    # иногда в err внутри сидит httpx.ReadError и т.п.
+    if err and err.__class__.__module__.startswith("httpx"):
+        logger.warning("HTTPX transient error: %s", repr(err))
+        return
+
+    # дальше твоя текущая логика: reply пользователю + notify admins
+    ...
 
     # 1) пользователю (мягко)
     try:
@@ -3618,10 +3637,14 @@ async def handle_log(update: Update, context: ContextTypes.DEFAULT_TYPE, u: dict
     await update.effective_message.reply_text("\n".join(lines))
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    msg = update.effective_message
+    if not msg:
+        return
+
     uid = update.effective_user.id
     ensure_user(uid)
 
-    text = (update.message.text or "").strip()
+    text = (getattr(msg, "text", None) or "").strip()
     if not text:
         return
 
@@ -3629,18 +3652,15 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data.get("await_creator_msg"):
         context.user_data["await_creator_msg"] = False
         if not CREATOR_ID:
-            await update.effective_message.reply_text("Создатель не настроен.")
+            await msg.reply_text("Создатель не настроен.")
             return
         await _send_to_creator(update, context, text)
         return
-
-
 
     # allow payment proof without subscription
     if not is_subscribed(uid):
         pending = get_pending_payment_request(uid)
 
-        # если есть pending-заявка и человек пишет “чек/оплат/скрин/#”
         if pending and (
             "#" in text
             or "чек" in text.lower()
@@ -3649,7 +3669,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             or "pix" in text.lower()
         ):
             attach_payment_proof(uid, pending["id"], proof_text=text[:2000], proof_file_id=None)
-            await update.effective_message.reply_text(
+            await msg.reply_text(
                 f"Принято. Заявка #{pending['id']}.\n"
                 "Я передала администратору, он подтвердит оплату и откроет доступ."
             )
@@ -3659,8 +3679,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
             return
 
-        # иначе, без подписки обычный текст не принимаем
-        await update.effective_message.reply_text(
+        await msg.reply_text(
             "Доступ закрыт: нужна подписка.\n"
             "Если ты уже оплатила, пришли сообщение со словом 'чек' или номером заявки (#...), или фото чека."
         )
@@ -3669,12 +3688,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ожидание количества
     pending = context.user_data.get("await_qty")
     if pending:
-        qty_text = (update.message.text or "").strip().lower()
+        qty_text = text.strip().lower()
 
         if qty_text in ("стандарт", "default"):
             suggestion = suggest_portion(pending["item_name"])
             if not suggestion:
-                await update.effective_message.reply_text("Не знаю стандартную порцию, напиши количество числом.")
+                await msg.reply_text("Не знаю стандартную порцию, напиши количество числом.")
                 return
             qty, unit = suggestion
             new_text = f"{pending['item_name']} {qty} {unit}"
@@ -3683,15 +3702,12 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         context.user_data.pop("await_qty", None)
 
-        await handle_log(update, context, get_user(update.effective_user.id), pending["meal"], new_text)
+        await handle_log(update, context, get_user(uid), pending["meal"], new_text)
         return
 
     u = get_user(uid)
 
-    text = (update.message.text or "").strip()
-    if not text:
-        return
-
+    # onboarding
     if is_onboarding_needed(u) and (u.get("onboarding_step") not in (None, "done")):
         consumed = await handle_onboarding_input(update, u, text)
         if consumed:
