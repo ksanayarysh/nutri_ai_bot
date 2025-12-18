@@ -164,6 +164,17 @@ def pay_keyboard(req_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("проверить подписку", callback_data="substatus")],
     ])
 
+import re
+
+_QTY_RE = re.compile(r"^\s*\d+(?:[.,]\d+)?\s*(г|гр|kg|кг|ml|мл|л|l|шт|pcs|piece|порц|порция|ложк|ст\.?л\.?|ч\.?л\.?)?\s*$", re.IGNORECASE)
+
+def looks_like_qty_reply(text: str) -> bool:
+    t = text.strip().lower()
+    if t in ("стандарт", "default", "отмена", "cancel"):
+        return True
+    return bool(_QTY_RE.match(t))
+
+
 def extract_meal_prefix(text: str):
     if ":" not in text:
         return None, text
@@ -2547,6 +2558,7 @@ def build_help_text(uid: int) -> str:
         "  /quota - сколько доступных запросов осталось",
         "",
         "При наличии подписки еду можно просто писать сообщением, например, 2 яйца, творог 100 гр",
+        "можно писать завтрак: омлет 100гр",
         "так же ты можешь добавить фото, я попробую распознать",
     ]
 
@@ -3713,22 +3725,28 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # ожидание количества
     pending = context.user_data.get("await_qty")
     if pending:
-        qty_text = text.strip().lower()
-
-        if qty_text in ("стандарт", "default"):
-            suggestion = suggest_portion(pending["item_name"])
-            if not suggestion:
-                await msg.reply_text("Не знаю стандартную порцию, напиши количество числом.")
-                return
-            qty, unit = suggestion
-            new_text = f"{pending['item_name']} {qty} {unit}"
+        # если человек вместо количества прислал новую запись (например "завтрак: ..."),
+        # то не цепляем её к прошлому продукту
+        if not looks_like_qty_reply(text):
+            context.user_data.pop("await_qty", None)
+            # продолжаем как обычный текст ниже (не return)
         else:
-            new_text = f"{pending['item_name']} {qty_text}"
+            qty_text = text.strip().lower()
 
-        context.user_data.pop("await_qty", None)
+            if qty_text in ("стандарт", "default"):
+                suggestion = suggest_portion(pending["item_name"])
+                if not suggestion:
+                    await msg.reply_text("Не знаю стандартную порцию, напиши количество числом.")
+                    return
+                qty, unit = suggestion
+                new_text = f"{pending['item_name']} {qty} {unit}"
+            else:
+                new_text = f"{pending['item_name']} {qty_text}"
 
-        await handle_log(update, context, get_user(uid), pending["meal"], new_text)
-        return
+            context.user_data.pop("await_qty", None)
+
+            await handle_log(update, context, get_user(uid), pending["meal"], new_text)
+            return
 
     u = get_user(uid)
 
