@@ -3993,7 +3993,7 @@ def main() -> None:
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
-    app.run_polling(close_loop=False)
+    app.run_polling()
 
 
 if __name__ == "__main__":
