@@ -15,8 +15,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
+    CommandHandler,    MessageHandler,
     ContextTypes,
     filters,
 )
