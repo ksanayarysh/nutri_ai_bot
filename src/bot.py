@@ -21,7 +21,7 @@ from telegram.ext import (
     filters,
 )
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 
 # =====================
 # config
@@ -30,7 +30,7 @@ load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL") or "gpt-4.1-mini"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL") or "gpt-5.2"
 DATABASE_URL = os.getenv("DATABASE_URL")
 DB_PATH="nutri.db"
 ADMIN_IDS = {int(x) for x in (os.getenv("ADMIN_IDS") or "").split(",") if x.isdigit()}
@@ -2084,12 +2084,19 @@ User message:
 {text}
 """.strip()
 
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_schema", "json_schema": _log_json_schema()},
-        temperature=0.2,
-    )
+    try:
+        resp = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_schema", "json_schema": _log_json_schema()},
+            temperature=0.2,
+        )
+    except OpenAIError as e:
+        logger.exception(f"OpenAI API error: {e}")
+        return "Ошибка доступа к ИИ. Возможно, закончились токены. Сообщите администратору."
+    except Exception as e:
+        logger.exception(f"Unexpected error: {e}")
+        return "Произошла непредвиденная ошибка при вызове ИИ."
 
     raw = resp.choices[0].message.content
     data = json.loads(raw)
