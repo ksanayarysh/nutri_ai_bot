@@ -24,6 +24,8 @@ BOT_USERNAME: str = os.getenv("BOT_USERNAME") or "@nutri_helper_ai_bot"
 
 CREATOR_ID: int | None = sorted(ADMIN_IDS)[0] if ADMIN_IDS else None
 
+TRIAL_DAYS = 30
+
 MEAL_ALIASES: dict[str, str] = {
     "завтрак": "breakfast",
     "обед": "lunch",
