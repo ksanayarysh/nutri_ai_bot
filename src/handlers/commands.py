@@ -86,7 +86,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(carbs), 0),
               COALESCE(SUM(fiber), 0)
             FROM entries
-            WHERE user_id = %s AND day = %s
+            WHERE user_id = %s AND entry_date = %s
             """,
             (user.id, day),
         )
@@ -131,7 +131,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s
-              AND day >= CURRENT_DATE - INTERVAL '7 days'
+              AND entry_date >= CURRENT_DATE - INTERVAL '7 days'
             """,
             (user.id,),
         )
@@ -302,7 +302,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
               COALESCE(SUM(carbs), 0),
               COALESCE(SUM(fiber), 0)
             FROM entries
-            WHERE user_id = %s AND day >= %s
+            WHERE user_id = %s AND entry_date >= %s
             """,
             (user.id, since),
         )
