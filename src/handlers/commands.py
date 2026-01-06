@@ -8,6 +8,11 @@ from src.db import ensure_user
 from src.subscriptions import ensure_trial_subscription
 from src.config import PRICE_TEXT
 
+from datetime import datetime, timedelta
+from src.config import TZ
+from src.db import db, today_str
+from src.subscriptions import is_subscribed
+
 
 # -------------------------
 # /start
@@ -146,14 +151,6 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Углеводы: {carbs:.1f} г\n"
         f"Net carbs: {net_carbs:.1f} г"
     )
-
-# --- add to src/handlers/commands.py ---
-
-from datetime import datetime, timedelta
-from src.config import TZ
-from src.db import db, today_str
-from src.subscriptions import is_subscribed
-
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user

@@ -78,12 +78,13 @@ def insert_entry(
     macros: Optional[Macros],
 ) -> None:
     with db() as conn:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO entries
-              (user_id, day, meal_type, text, calories, protein, fat, carbs, net_carbs, created_at)
+              (user_id, day, meal_type, text, calories, protein, fat, carbs, fiber, created_at)
             VALUES
-              (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 user_id,
@@ -94,34 +95,35 @@ def insert_entry(
                 None if macros is None else macros.protein,
                 None if macros is None else macros.fat,
                 None if macros is None else macros.carbs,
-                None if macros is None else macros.net_carbs,
+                None if macros is None else getattr(macros, "fiber", None),
                 now_iso(),
             ),
         )
 
-
 def get_day_totals(user_id: int, day: str) -> Macros:
     with db() as conn:
-        row = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             SELECT
-              COALESCE(SUM(calories), 0) AS calories,
-              COALESCE(SUM(protein),  0) AS protein,
-              COALESCE(SUM(fat),      0) AS fat,
-              COALESCE(SUM(carbs),    0) AS carbs,
-              COALESCE(SUM(fiber),0) AS net_carbs
+              COALESCE(SUM(calories), 0),
+              COALESCE(SUM(protein),  0),
+              COALESCE(SUM(fat),      0),
+              COALESCE(SUM(carbs),    0),
+              COALESCE(SUM(fiber),    0)
             FROM entries
-            WHERE user_id = ? AND entry_date = ?
+            WHERE user_id = %s AND day = %s
             """,
             (user_id, day),
-        ).fetchone()
+        )
+        calories, protein, fat, carbs, fiber = cur.fetchone()
 
     return Macros(
-        calories=float(row["calories"]),
-        protein=float(row["protein"]),
-        fat=float(row["fat"]),
-        carbs=float(row["carbs"]),
-        net_carbs=float(row["net_carbs"]),
+        calories=float(calories),
+        protein=float(protein),
+        fat=float(fat),
+        carbs=float(carbs),
+        net_carbs=float(fiber),
     )
 
 
