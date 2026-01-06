@@ -141,6 +141,7 @@ def get_day_totals(user_id: int, day: str) -> Macros:
         calories, protein, fat, carbs, fiber = cur.fetchone()
 
     return Macros(
+        "", 0, "",
         calories=float(calories),
         protein=float(protein),
         fat=float(fat),
