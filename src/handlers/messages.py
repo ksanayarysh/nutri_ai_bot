@@ -1,15 +1,22 @@
 # nutribot/handlers/messages.py
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
+
+from src.ai import ai_estimate
+from src.config import MEAL_ALIASES
+import json
+import re
 from typing import Optional, Tuple
 
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.config import MEAL_ALIASES
 from src.db import db, now_iso, today_str
+from src.aliases import apply_aliases_to_text
+from src.profile import build_profile_hint
+from src.portions import suggest_portion
+
 from src.payments import attach_payment_proof, get_pending_payment_request,notify_admins_about_payment
 
 try:
@@ -18,6 +25,36 @@ except Exception:  # pragma: no cover
     estimate_from_text = None
     estimate_from_photo = None
 
+
+def fmt(x: float | None) -> str:
+    if x is None:
+        return "—"
+    return f"{x:.1f}"
+
+
+def net_carbs(carbs: float | None, fiber: float | None) -> float:
+    return max(0.0, float(carbs or 0.0) - float(fiber or 0.0))
+
+
+def unit_to_ru(unit: str | None) -> str:
+    return {
+        "g": "г",
+        "kg": "кг",
+        "ml": "мл",
+        "l": "л",
+        "pcs": "шт",
+        "tsp": "ч.л.",
+        "tbsp": "ст.л.",
+    }.get(unit, unit or "")
+
+
+def meal_to_ru(meal: str) -> str:
+    return {
+        "breakfast": "завтрак",
+        "lunch": "обед",
+        "dinner": "ужин",
+        "snack": "перекус",
+    }.get(meal, meal)
 
 # -------------------------
 # Parsing helpers
@@ -56,18 +93,16 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
         body = text.strip()
     return meal, body
 
-
-# -------------------------
-# DB writes (MVP)
-# -------------------------
-
 @dataclass
 class Macros:
-    calories: float
-    protein: float
-    fat: float
-    carbs: float
-    net_carbs: float
+    name: str
+    qty: float
+    unit: str
+    calories: float | None
+    protein: float | None
+    fat: float | None
+    carbs: float | None
+    fiber: float | None
 
 
 def insert_entry(
@@ -82,7 +117,7 @@ def insert_entry(
         cur.execute(
             """
             INSERT INTO entries
-              (user_id, day, meal_type, text, calories, protein, fat, carbs, fiber, created_at)
+              (user_id, entry_date, meal, raw_text, calories, protein, fat, carbs, fiber, created_at)
             VALUES
               (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
@@ -123,7 +158,7 @@ def get_day_totals(user_id: int, day: str) -> Macros:
         protein=float(protein),
         fat=float(fat),
         carbs=float(carbs),
-        net_carbs=float(fiber),
+        fiber=float(fiber),
     )
 
 
@@ -359,3 +394,235 @@ async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "Привет! Я тут, чтобы вести дневник питания и считать КБЖУ.\n"
         "Пиши что съела (например: 'завтрак: яйца и сыр') или пришли фото еды."
     )
+
+
+# -------------------------
+# qty parsing helpers
+# -------------------------
+
+QTY_RE = re.compile(
+    r"(?P<qty>\d+(?:[.,]\d+)?)\s*(?P<unit>г|гр|g|kg|кг|мл|ml|л|l|шт|pcs|tsp|tbsp)\b",
+    re.IGNORECASE,
+)
+
+def parse_qty_unit(text: str) -> Optional[Tuple[float, str]]:
+    t = text.strip().lower()
+    if t in {"стандарт", "standard"}:
+        return None  # special handled outside
+    m = QTY_RE.search(t)
+    if not m:
+        return None
+    qty = float(m.group("qty").replace(",", "."))
+    unit = m.group("unit").lower()
+    # normalize units
+    unit_map = {
+        "гр": "g", "г": "g", "g": "g",
+        "кг": "kg", "kg": "kg",
+        "мл": "ml", "ml": "ml",
+        "л": "l", "l": "l",
+        "шт": "pcs", "pcs": "pcs",
+        "tsp": "tsp", "tbsp": "tbsp",
+    }
+    return qty, unit_map.get(unit, unit)
+
+
+def user_provided_qty(text: str) -> bool:
+    return bool(QTY_RE.search(text))
+
+
+# -------------------------
+# IMPORTANT:
+# items returned by ai_estimate are expected to have:
+# it.name, it.qty, it.unit, it.calories, it.protein, it.fat, it.carbs, it.fiber
+# -------------------------
+
+
+async def handle_log(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    u: dict,
+    meal: str,
+    text: str,
+) -> None:
+    uid = u["user_id"]
+    d = today_str()
+    msg = update.effective_message
+    if not msg:
+        return
+
+    # Optional: gate some features behind subscription (up to you)
+    # logging itself usually should work for everyone.
+    # if not is_subscribed(uid): ...
+
+    # 1) If we were waiting for qty from previous message, handle it first
+    if context.user_data.get("await_qty"):
+        awaited = context.user_data["await_qty"]
+
+        # only treat THIS message as qty answer (user typically replies right after prompt)
+        parsed = parse_qty_unit(text)
+        if text.strip().lower() in {"стандарт", "standard"}:
+            parsed = (awaited["suggest_qty"], awaited["suggest_unit"])
+
+        if not parsed:
+            await msg.reply_text("Не вижу количество. Пример: `100 г` или `1 шт`.", parse_mode="Markdown")
+            return
+
+        qty, unit = parsed
+
+        # continue the flow using saved context
+        meal = awaited["meal"]
+        original_text = awaited["text"]
+        replaced_text = awaited.get("replaced_text") or original_text
+        profile_hint = awaited.get("profile_hint") or {}
+        confidence = awaited.get("confidence")
+        meta = awaited.get("meta") or {"assumptions": []}
+
+        # re-run AI estimate to get items (or you can just patch single item if you store it)
+        items, confidence2, meta2 = ai_estimate(text=replaced_text, meal_hint=meal, profile_hint=profile_hint)
+        if meta2:
+            meta = meta2
+        if confidence2 is not None:
+            confidence = confidence2
+
+        if not items:
+            context.user_data.pop("await_qty", None)
+            await msg.reply_text("Не смогла восстановить запись. Попробуй ещё раз описать продукт.")
+            return
+
+        # patch qty/unit for the single item we asked about
+        # we only ask qty when len(items)==1, so:
+        items[0].qty = qty
+        items[0].unit = unit
+
+        # clear await state
+        context.user_data.pop("await_qty", None)
+
+        # proceed to save
+        await _save_items_and_reply(
+            update=update,
+            uid=uid,
+            day=d,
+            meal=meal,
+            raw_text=original_text,
+            items=items,
+            confidence=confidence,
+            meta=meta,
+        )
+        return
+
+    # 2) Normal flow
+    replaced_text, alias_notes = apply_aliases_to_text(uid, text)
+    profile_hint = build_profile_hint(u)
+
+    try:
+        items, confidence, meta = ai_estimate(text=replaced_text, meal_hint=meal, profile_hint=profile_hint)
+    except Exception as e:
+        await msg.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
+        return
+
+    meta = meta or {"assumptions": []}
+    meta.setdefault("assumptions", [])
+
+    # If user didn't provide qty and this is a single item -> ask for qty
+    if not user_provided_qty(text) and items and len(items) == 1:
+        it = items[0]
+        suggestion = suggest_portion(it.name)  # expected: (qty, unit) or None
+
+        if suggestion:
+            s_qty, s_unit = suggestion
+            await msg.reply_text(
+                f"Ты указала продукт без количества: {it.name}.\n"
+                f"Какое количество учитывать?\n\n"
+                f"Напиши число (например: 100 г)\n"
+                f"или ответь «стандарт» — я возьму {s_qty} {unit_to_ru(s_unit)}."
+            )
+        else:
+            s_qty, s_unit = 0.0, "g"
+            await msg.reply_text(
+                f"Ты указала продукт без количества: {it.name}.\n"
+                f"Напиши количество, например: 100 г или 1 шт."
+            )
+
+        # save await context
+        context.user_data["await_qty"] = {
+            "meal": meal,
+            "text": text,
+            "item_name": it.name,
+            "suggest_qty": float(s_qty),
+            "suggest_unit": s_unit,
+            "replaced_text": replaced_text,
+            "profile_hint": profile_hint,
+            "confidence": confidence,
+            "meta": meta,
+        }
+        return
+
+    if alias_notes:
+        meta["assumptions"].extend(alias_notes)
+        meta["notes"] = (meta.get("notes") or "") + (" | aliases applied" if meta.get("notes") else "aliases applied")
+
+    if not items:
+        await msg.reply_text("Я не знаю эту команду. Чтобы увидеть возможности, набери /help")
+        return
+
+    await _save_items_and_reply(
+        update=update,
+        uid=uid,
+        day=d,
+        meal=meal,
+        raw_text=text,
+        items=items,
+        confidence=confidence,
+        meta=meta,
+    )
+
+
+async def _save_items_and_reply(
+    update: Update,
+    uid: int,
+    day: str,
+    meal: str,
+    raw_text: str,
+    items: list,
+    confidence: Optional[float],
+    meta: dict,
+) -> None:
+    msg = update.effective_message
+    if not msg:
+        return
+
+    created_at = now_iso()
+    meta_json = json.dumps(meta or {}, ensure_ascii=False)
+
+    with db() as conn:
+        cur = conn.cursor()
+        for it in items:
+            cur.execute(
+                """
+                INSERT INTO entries(
+                    user_id, entry_date, meal, raw_text,
+                    item_name, qty, unit,
+                    calories, protein, fat, carbs, fiber,
+                    confidence, meta_json, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    uid, day, meal, raw_text,
+                    it.name, it.qty, it.unit,
+                    it.calories, it.protein, it.fat, it.carbs, it.fiber,
+                    confidence, meta_json, created_at
+                ),
+            )
+
+    lines = [f"добавлено ({meal_to_ru(meal)}):"]
+    for it in items:
+        fib = float(it.fiber or 0.0)
+        net = net_carbs(it.carbs, fib)
+        lines.append(
+            f"- {it.name} ({it.qty} {unit_to_ru(it.unit)}): {fmt(it.calories)} ккал, "
+            f"белки {fmt(it.protein)} г, жиры {fmt(it.fat)} г, углеводы {fmt(it.carbs)} г "
+            f"(клетч. {fmt(fib)} г, чистые {fmt(net)} г)"
+        )
+
+    await msg.reply_text("\n".join(lines))

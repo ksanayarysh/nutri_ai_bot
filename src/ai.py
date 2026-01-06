@@ -1,0 +1,373 @@
+import base64
+import json
+from openai import OpenAI
+
+from src.config import OPENAI_API_KEY, OPENAI_MODEL
+from src.handlers.messages import Macros as AiItem
+
+client = OpenAI(api_key=OPENAI_API_KEY)
+
+
+FOOD_CATEGORIES = {
+    "egg": ["яйц", "egg"],
+    "meat": ["мяс", "говя", "кур", "индей", "pork", "beef", "chicken", "lingui", "linguiça", "salsicha", "sausage"],
+    "fish": ["рыб", "salmon", "tuna", "atum", "salmão", "peixe"],
+    "dairy": ["сыр", "cheese", "iogurte", "йогурт", "cream", "leite", "milk"],
+    "vegetable": ["огур", "помид", "томат", "брок", "капуст", "cucumber", "tomat", "broccoli", "brócolis", "alface", "salad"],
+    "fruit": ["ябл", "banana", "банан", "avocado", "abacate", "manga", "melão", "mamão", "papaya"],
+    "fat": ["масло", "oil", "azeite", "manteiga", "butter", "ghee"],
+    "grain": ["рис", "rice", "oats", "овсян", "хлеб", "bread", "macarr", "pasta", "massa"],
+    "unknown": [],
+}
+
+CATEGORY_LIMITS = {
+    "egg":       {"calories": (40, 120), "protein": (3, 15), "fat": (0, 12)},
+    "meat":      {"calories": (80, 450), "protein": (10, 70), "fat": (0, 45)},
+    "fish":      {"calories": (70, 400), "protein": (10, 70), "fat": (0, 35)},
+    "dairy":     {"calories": (50, 500), "protein": (3, 45), "fat": (0, 45)},
+    "vegetable": {"calories": (5, 200),  "protein": (0, 12), "fat": (0, 8)},
+    "fruit":     {"calories": (20, 350), "protein": (0, 6),  "fat": (0, 20)},
+    "fat":       {"calories": (20, 350), "protein": (0, 3),  "fat": (2, 40)},
+    "grain":     {"calories": (50, 550), "protein": (2, 30), "fat": (0, 25)},
+    "unknown":   {},
+}
+def _log_json_schema():
+    return {
+        "name": "nutrition_log",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "name": {"type": "string"},
+                            "qty": {"type": "number"},
+                            "unit": {"type": "string"},
+                            "calories": {"type": ["number", "null"]},
+                            "protein": {"type": ["number", "null"]},
+                            "fat": {"type": ["number", "null"]},
+                            "carbs": {"type": ["number", "null"]},
+                            "fiber": {"type": ["number", "null"]},
+                        },
+                        "required": ["name", "qty", "unit", "calories", "protein", "fat", "carbs", "fiber"],
+                    },
+                },
+                "confidence": {"type": "number"},
+                "assumptions": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "string"},
+            },
+            "required": ["items", "confidence", "assumptions", "notes"],
+        },
+    }
+
+def _analysis_json_schema_ru():
+    return {
+        "name": "daily_analysis_ru",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "headline": {"type": "string"},
+                "good": {"type": "array", "items": {"type": "string"}},
+                "improve": {"type": "array", "items": {"type": "string"}},
+                "plan": {"type": "array", "items": {"type": "string"}},
+                "warnings": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "number"},
+            },
+            "required": ["headline", "good", "improve", "plan", "warnings", "confidence"],
+        },
+    }
+
+
+FIBER_LIKELY = (
+    "чиа", "chia",
+    "огур", "cucumber",
+    "помид", "tomat",
+    "салат", "alface", "salad",
+    "брок", "broccoli", "brócolis",
+    "капуст", "cabbage",
+    "овощ", "vegetable", "legume",
+    "сем", "seed",
+    "орех", "nut",
+    "ягод", "berry",
+    "фасол", "feijão", "beans",
+    "зерн", "cereal", "granola", "aveia", "oats",
+    "цельн", "whole",
+    "fruit", "fruta"
+)
+
+def detect_food_category(name: str) -> str:
+    n = (name or "").lower()
+    for cat, keys in FOOD_CATEGORIES.items():
+        for k in keys:
+            if k in n:
+                return cat
+    return "unknown"
+
+def clamp(v: float | None, lo: float, hi: float) -> float | None:
+    if v is None:
+        return None
+    try:
+        x = float(v)
+    except Exception:
+        return None
+    return max(lo, min(hi, x))
+
+def sanitize_item(it: "AiItem") -> tuple["AiItem", list[str]]:
+    notes: list[str] = []
+    cat = detect_food_category(it.name)
+    limits = CATEGORY_LIMITS.get(cat, {})
+
+    def fix(field: str):
+        v = getattr(it, field)
+        if field in limits and v is not None:
+            lo, hi = limits[field]
+            nv = clamp(v, lo, hi)
+            if nv is not None and nv != v:
+                notes.append(f"{it.name}: {field} {v} -> {nv} (clamp {cat})")
+                setattr(it, field, nv)
+
+    fix("calories")
+    fix("protein")
+    fix("fat")
+
+    if it.carbs is not None:
+        try:
+            c = float(it.carbs)
+        except Exception:
+            c = None
+        if c is not None:
+            f = float(it.fiber or 0.0)
+            if c < f:
+                notes.append(f"{it.name}: carbs {it.carbs} < fiber {f}, corrected")
+                it.carbs = f
+
+    return it, notes
+
+
+def fix_totals_for_pcs(items: list) -> list[str]:
+    notes = []
+    for it in items:
+        if (it.unit or "").lower() != "pcs":
+            continue
+        if it.qty is None or it.qty <= 1:
+            continue
+
+        cat = detect_food_category(it.name)
+        limits = CATEGORY_LIMITS.get(cat) or {}
+        if not limits:
+            continue
+
+        # проверяем calories/protein/fat как будто они "per 1 pcs"
+        # и если так, масштабируем на qty
+        def maybe_scale(field: str):
+            v = getattr(it, field)
+            if v is None:
+                return
+            if field not in limits:
+                return
+            lo, hi = limits[field]
+            if lo <= float(v) <= hi:
+                setattr(it, field, float(v) * float(it.qty))
+                notes.append(f"{it.name}: {field} умножено на qty={it.qty} (похоже было на 1 шт)")
+
+        maybe_scale("calories")
+        maybe_scale("protein")
+        maybe_scale("fat")
+    return notes
+
+def suspicious_zero_fiber(name: str, fiber, carbs) -> bool:
+    if fiber is None:
+        return False
+    try:
+        f = float(fiber)
+        c = 0.0 if carbs is None else float(carbs)
+    except Exception:
+        return False
+    if f != 0.0 or c <= 0:
+        return False
+    n = (name or "").lower()
+    return any(k in n for k in FIBER_LIKELY)
+
+
+def ai_estimate(text: str, meal_hint: str, profile_hint: dict) -> tuple[list[AiItem], float, dict]:
+    prompt = f"""
+        You are a nutrition diary assistant.
+        Task: parse the user message into items and estimate calories and macros (including fiber).
+        
+        Profile (may be partial, use only if relevant):
+        {json.dumps(profile_hint, ensure_ascii=False)}
+        
+        Rules:
+        - Output JSON only, matching the provided schema.
+        - Units: "g", "ml", "pcs", "tbsp", "tsp", "serving"
+        - Macros are grams; calories are kcal.
+        - Fiber must be realistic:
+          - Do NOT output fiber=0 unless you are confident it is essentially zero (e.g., meat, eggs, oil, cheese, plain yogurt).
+          - If unsure, set fiber=null (not 0) and explain in assumptions.
+        - If grams/ml not provided, assume a reasonable serving size and write it in assumptions.
+        - Use typical nutrition averages when brand is unknown.
+        - Keep values plausible, avoid extreme numbers.
+        - All calories/macros must be TOTAL for the given qty+unit (not per 1 unit).
+        - If unit is "pcs" and qty > 1, totals must scale with qty.
+        - A number applies only to the nearest food item, not to the whole list.
+        - If qty for an item is unclear, set qty=1 and mention it in assumptions (do NOT copy qty from previous item).
+        - All item names MUST be in the language which the user used to ask.
+        - Units MUST be only: "g", "ml", "pcs", "tbsp", "tsp", "serving" (no bottle/cup/etc).
+        - Confidence is 0..1.
+        
+        Meal hint: "{meal_hint}"
+
+User message:
+{text}
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": _log_json_schema()},
+        temperature=0.2,
+    )
+
+    raw = resp.choices[0].message.content
+    data = json.loads(raw)
+
+    items: list[AiItem] = []
+    for it in data.get("items", []):
+        items.append(AiItem(
+            name=str(it["name"]).strip(),
+            qty=float(it["qty"]),
+            unit=str(it["unit"]).strip(),
+            calories=it["calories"],
+            protein=it["protein"],
+            fat=it["fat"],
+            carbs=it["carbs"],
+            fiber=it["fiber"],
+        ))
+
+    meta = {
+        "confidence": float(data.get("confidence", 0.0)),
+        "assumptions": list(data.get("assumptions", []) or []),
+        "notes": data.get("notes", ""),
+        "raw_ai": data,
+        "prompt_version": "ai_mode_a_ru_week_v4_subscriptions_back_targets_v1",
+        "model": OPENAI_MODEL,
+    }
+
+    for it in items:
+        if suspicious_zero_fiber(it.name, it.fiber, it.carbs):
+            it.fiber = None
+            meta["assumptions"].append(
+                f"клетчатка для '{it.name}' неизвестна (ai вернул 0, но похоже на растительную еду)."
+            )
+
+    sanity_notes: list[str] = []
+    clean_items: list[AiItem] = []
+    for it in items:
+        it2, notes = sanitize_item(it)
+        clean_items.append(it2)
+        sanity_notes.extend(notes)
+
+    items = clean_items
+    scale_notes = fix_totals_for_pcs(items)
+    if scale_notes:
+        meta["assumptions"].extend(scale_notes)
+
+    if sanity_notes:
+        meta["assumptions"].extend(sanity_notes)
+
+    return items, meta["confidence"], meta
+
+def ai_estimate_photo(image_bytes: bytes, image_mime: str, meal_hint: str, profile_hint: dict) -> tuple[list[AiItem], float, dict]:
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    data_url = f"data:{image_mime};base64,{b64}"
+
+    prompt = f"""
+You are a nutrition diary assistant.
+Task: analyze the food photo and output items and estimated macros (including fiber).
+
+Profile (may be partial, use only if relevant):
+{json.dumps(profile_hint, ensure_ascii=False)}
+
+Rules:
+- Output JSON only, matching the provided schema.
+- Units: "g", "ml", "pcs", "tbsp", "tsp", "serving"
+- If quantities are unknown from photo, choose reasonable defaults and explain in assumptions.
+- Fiber must be realistic:
+  - Do NOT output fiber=0 unless you are confident it is essentially zero.
+  - If unsure, set fiber=null and explain in assumptions.
+- Keep values plausible, avoid extreme numbers.
+- All calories/macros must be TOTAL for the given qty+unit (not per 1 unit).
+- If unit is "pcs" and qty > 1, totals must scale with qty.
+- A number applies only to the nearest food item, not to the whole list.
+- If qty for an item is unclear, set qty=1 and mention it in assumptions (do NOT copy qty from previous item).
+- All item names MUST be in Russian.
+- Do not use Latin letters in "name". If user wrote in English, translate to Russian.
+- Units MUST be only: "g", "ml", "pcs", "tbsp", "tsp", "serving" (no bottle/cup/etc).
+- Confidence is 0..1.
+
+Meal hint: "{meal_hint}"
+""".strip()
+
+    # мультимодальный ввод: текст + изображение
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": data_url}},
+            ],
+        }],
+        response_format={"type": "json_schema", "json_schema": _log_json_schema()},
+        temperature=0.2,
+    )
+
+    raw = resp.choices[0].message.content
+    data = json.loads(raw)
+
+    items: list[AiItem] = []
+    for it in data.get("items", []):
+        items.append(AiItem(
+            name=str(it["name"]).strip(),
+            qty=float(it["qty"]),
+            unit=str(it["unit"]).strip(),
+            calories=it["calories"],
+            protein=it["protein"],
+            fat=it["fat"],
+            carbs=it["carbs"],
+            fiber=it["fiber"],
+        ))
+
+    meta = {
+        "confidence": float(data.get("confidence", 0.0)),
+        "assumptions": list(data.get("assumptions", []) or []),
+        "notes": data.get("notes", ""),
+        "raw_ai": data,
+        "prompt_version": "ai_mode_photo_v1",
+        "model": OPENAI_MODEL,
+    }
+
+    for it in items:
+        if suspicious_zero_fiber(it.name, it.fiber, it.carbs):
+            it.fiber = None
+            meta["assumptions"].append(
+                f"клетчатка для '{it.name}' неизвестна (ai вернул 0, но похоже на растительную еду)."
+            )
+
+    sanity_notes: list[str] = []
+    clean_items: list[AiItem] = []
+    for it in items:
+        it2, notes = sanitize_item(it)
+        clean_items.append(it2)
+        sanity_notes.extend(notes)
+
+    items = clean_items
+    if sanity_notes:
+        meta["assumptions"].extend(sanity_notes)
+
+    return items, meta["confidence"], meta
