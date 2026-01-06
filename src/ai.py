@@ -3,7 +3,7 @@ import json
 from openai import OpenAI
 
 from src.config import OPENAI_API_KEY, OPENAI_MODEL
-from src.handlers.messages import Macros as AiItem
+from src.food_structure.food import Macros as AiItem
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 

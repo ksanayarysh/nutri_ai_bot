@@ -1,10 +1,9 @@
 # nutribot/handlers/messages.py
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from src.ai import ai_estimate
 from src.config import MEAL_ALIASES
+from src.food_structure.food import Macros
 import json
 import re
 from typing import Optional, Tuple
@@ -92,18 +91,6 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
     if not body:
         body = text.strip()
     return meal, body
-
-@dataclass
-class Macros:
-    name: str
-    qty: float
-    unit: str
-    calories: float | None
-    protein: float | None
-    fat: float | None
-    carbs: float | None
-    fiber: float | None
-
 
 def insert_entry(
     user_id: int,
@@ -274,7 +261,7 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
                 protein=float(est.get("protein", 0)),
                 fat=float(est.get("fat", 0)),
                 carbs=float(est.get("carbs", 0)),
-                net_carbs=float(est.get("net_carbs", est.get("carbs", 0))),
+                fiber=float(est.get("net_carbs", est.get("carbs", 0))),
             )
         except Exception:
             macros = None
@@ -320,7 +307,7 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 protein=float(est.get("protein", 0)),
                 fat=float(est.get("fat", 0)),
                 carbs=float(est.get("carbs", 0)),
-                net_carbs=float(est.get("net_carbs", est.get("carbs", 0))),
+                fiber=float(est.get("net_carbs", est.get("carbs", 0))),
             )
         except Exception:
             macros = None
