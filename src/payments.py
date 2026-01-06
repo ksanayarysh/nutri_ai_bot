@@ -1,7 +1,7 @@
 # nutribot/payments.py
 from __future__ import annotations
 
-from typing import Optional
+import psycopg2.extras
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -32,10 +32,10 @@ def create_payment_request(user_id: int) -> int:
 
 def get_pending_payment_request(user_id: int):
     with db() as conn:
-        cur = conn.cursor()
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
         cur.execute(
             """
-            SELECT id, user_id, status, created_at, proof_file_id, proof_text
+            SELECT *
             FROM payment_requests
             WHERE user_id = %s
               AND status = 'pending'
@@ -44,7 +44,7 @@ def get_pending_payment_request(user_id: int):
             """,
             (user_id,),
         )
-        return cur.fetchone()  # tuple или None
+        return cur.fetchone()  # dict или None
 
 
 def attach_payment_proof(
