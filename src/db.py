@@ -85,3 +85,31 @@ def init_db() -> None:
             proof_text TEXT
         );
         """)
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS targets (
+              user_id BIGINT PRIMARY KEY,
+              calories REAL,
+              protein REAL,
+              fat REAL,
+              carbs REAL,
+              net_carbs REAL,
+              mode TEXT,
+              updated_at TEXT
+            );
+        """)
+
+
+
+
+def ensure_user(user_id: int, username: str | None, first_name: str | None) -> None:
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO users (user_id, username, first_name, created_at)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (user_id) DO NOTHING
+            """,
+            (user_id, username, first_name, now_iso()),
+        )
