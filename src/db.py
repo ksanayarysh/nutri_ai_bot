@@ -59,6 +59,12 @@ def init_db() -> None:
         );
         """)
 
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name  TEXT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS trial_until  TEXT;")
+        cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS subscribed_until  TEXT;")
+
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS entries (
             id SERIAL PRIMARY KEY,
@@ -107,9 +113,11 @@ def ensure_user(user_id: int, username: str | None, first_name: str | None) -> N
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO users (user_id, username, first_name, created_at)
+            INSERT INTO users (user_id, created_at, username, first_name)
             VALUES (%s, %s, %s, %s)
-            ON CONFLICT (user_id) DO NOTHING
+            ON CONFLICT (user_id) DO UPDATE SET
+              username = EXCLUDED.username,
+              first_name = EXCLUDED.first_name
             """,
-            (user_id, username, first_name, now_iso()),
+            (user_id, now_iso(), username, first_name),
         )
