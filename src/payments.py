@@ -14,46 +14,53 @@ from src.db import db, now_iso
 # DB helpers
 # =====================
 
+# src/payments.py (DB helpers for Postgres)
+
 def create_payment_request(user_id: int) -> int:
     with db() as conn:
-        cur = conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             INSERT INTO payment_requests (user_id, status, created_at)
-            VALUES (?, 'pending', ?)
+            VALUES (%s, 'pending', %s)
+            RETURNING id
             """,
             (user_id, now_iso()),
         )
-        return cur.lastrowid
+        return int(cur.fetchone()[0])
 
 
 def get_pending_payment_request(user_id: int):
     with db() as conn:
-        return conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
-            SELECT *
+            SELECT id, user_id, status, created_at, proof_file_id, proof_text
             FROM payment_requests
-            WHERE user_id = ?
+            WHERE user_id = %s
               AND status = 'pending'
             ORDER BY created_at DESC
             LIMIT 1
             """,
             (user_id,),
-        ).fetchone()
+        )
+        return cur.fetchone()  # tuple или None
 
 
 def attach_payment_proof(
     request_id: int,
     *,
-    proof_file_id: Optional[str] = None,
-    proof_text: Optional[str] = None,
+    proof_file_id: str | None = None,
+    proof_text: str | None = None,
 ) -> None:
     with db() as conn:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             UPDATE payment_requests
-            SET proof_file_id = COALESCE(?, proof_file_id),
-                proof_text    = COALESCE(?, proof_text)
-            WHERE id = ?
+            SET proof_file_id = COALESCE(%s, proof_file_id),
+                proof_text    = COALESCE(%s, proof_text)
+            WHERE id = %s
             """,
             (proof_file_id, proof_text, request_id),
         )
@@ -61,15 +68,15 @@ def attach_payment_proof(
 
 def mark_paid(request_id: int) -> None:
     with db() as conn:
-        conn.execute(
+        cur = conn.cursor()
+        cur.execute(
             """
             UPDATE payment_requests
             SET status = 'paid'
-            WHERE id = ?
+            WHERE id = %s
             """,
             (request_id,),
         )
-
 
 # =====================
 # UI helpers
