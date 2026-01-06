@@ -84,7 +84,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
               COALESCE(SUM(carbs), 0),
-              COALESCE(SUM(net_carbs), 0)
+              COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s AND day = %s
             """,
@@ -128,7 +128,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
               COALESCE(SUM(carbs), 0),
-              COALESCE(SUM(net_carbs), 0)
+              COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s
               AND day >= CURRENT_DATE - INTERVAL '7 days'
@@ -300,7 +300,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
               COALESCE(SUM(carbs), 0),
-              COALESCE(SUM(net_carbs), 0)
+              COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s AND day >= %s
             """,

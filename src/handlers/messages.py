@@ -109,7 +109,7 @@ def get_day_totals(user_id: int, day: str) -> Macros:
               COALESCE(SUM(protein),  0) AS protein,
               COALESCE(SUM(fat),      0) AS fat,
               COALESCE(SUM(carbs),    0) AS carbs,
-              COALESCE(SUM(net_carbs),0) AS net_carbs
+              COALESCE(SUM(fiber),0) AS net_carbs
             FROM entries
             WHERE user_id = ? AND day = ?
             """,
