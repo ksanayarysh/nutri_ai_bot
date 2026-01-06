@@ -134,7 +134,7 @@ def get_day_totals(user_id: int, day: str) -> Macros:
               COALESCE(SUM(carbs),    0),
               COALESCE(SUM(fiber),    0)
             FROM entries
-            WHERE user_id = %s AND day = %s
+            WHERE user_id = %s AND entry_date = %s
             """,
             (user_id, day),
         )
