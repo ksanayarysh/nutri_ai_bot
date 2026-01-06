@@ -6,8 +6,8 @@ from typing import Optional
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from config import ADMIN_IDS, PAYMENT_INSTRUCTIONS
-from db import db, now_iso
+from src.config import ADMIN_IDS, PAYMENT_INSTRUCTIONS
+from src.db import db, now_iso
 
 
 # =====================
