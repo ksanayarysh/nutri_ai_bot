@@ -53,6 +53,7 @@ def meal_to_ru(meal: str) -> str:
         "lunch": "обед",
         "dinner": "ужин",
         "snack": "перекус",
+        "other": "перекус",
     }.get(meal, meal)
 
 # -------------------------

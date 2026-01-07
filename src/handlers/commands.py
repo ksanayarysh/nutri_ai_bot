@@ -82,6 +82,29 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     with db() as conn:
         cur = conn.cursor()
+
+        # 1️⃣ Полный список еды за день
+        cur.execute(
+            """
+            SELECT
+              meal_type,
+              item_name,
+              qty,
+              unit,
+              calories,
+              protein,
+              fat,
+              carbs,
+              fiber
+            FROM entries
+            WHERE user_id = %s AND entry_date = %s
+            ORDER BY meal_type, id
+            """,
+            (user.id, day),
+        )
+        rows = cur.fetchall()
+
+        # 2️⃣ Итоги
         cur.execute(
             """
             SELECT
@@ -95,16 +118,37 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             """,
             (user.id, day),
         )
-        calories, protein, fat, carbs, net_carbs = cur.fetchone()
+        calories, protein, fat, carbs, fiber = cur.fetchone()
 
-    await update.message.reply_text(
-        f"📊 Итоги за сегодня:\n\n"
+    if not rows:
+        await update.message.reply_text("📭 За сегодня пока ничего не записано.")
+        return
+
+    # Группируем по приёму пищи
+    meals: dict[str, list[str]] = {}
+    for meal, name, qty, unit, cal, p, f, c, fi in rows:
+        meals.setdefault(meal or "other", []).append(
+            f"• {name} — {qty:g} {unit} "
+            f"({cal:.0f} ккал, Б {p:.1f}, Ж {f:.1f}, У {c:.1f})"
+        )
+
+    lines = ["📋 Сегодня ты съела:"]
+    for meal, items in meals.items():
+        lines.append(f"\n🍽 {meal}")
+        lines.extend(items)
+
+    net_carbs = max(carbs - fiber, 0)
+
+    lines.append(
+        "\n📊 Итоги за сегодня:\n"
         f"Ккал: {calories:.0f}\n"
         f"Белки: {protein:.1f} г\n"
         f"Жиры: {fat:.1f} г\n"
         f"Углеводы: {carbs:.1f} г\n"
         f"Чистые углеводы: {net_carbs:.1f} г"
     )
+
+    await update.message.reply_text("\n".join(lines))
 
 
 # -------------------------
