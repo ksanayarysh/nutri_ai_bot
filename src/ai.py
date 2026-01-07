@@ -20,6 +20,9 @@ FOOD_CATEGORIES = {
     "unknown": [],
 }
 
+# NOTE:
+# Limits are used only for *sanity clamping* (extreme outliers), NOT for scaling qty.
+# Automatic scaling by qty caused double-counting and wrong totals (e.g., cucumber/egg).
 CATEGORY_LIMITS = {
     "egg":       {"calories": (40, 120), "protein": (3, 15), "fat": (0, 12)},
     "meat":      {"calories": (80, 450), "protein": (10, 70), "fat": (0, 45)},
@@ -31,6 +34,8 @@ CATEGORY_LIMITS = {
     "grain":     {"calories": (50, 550), "protein": (2, 30), "fat": (0, 25)},
     "unknown":   {},
 }
+
+
 def _log_json_schema():
     return {
         "name": "nutrition_log",
@@ -63,6 +68,7 @@ def _log_json_schema():
             "required": ["items", "confidence", "assumptions", "notes"],
         },
     }
+
 
 def _analysis_json_schema_ru():
     return {
@@ -100,6 +106,7 @@ FIBER_LIKELY = (
     "fruit", "fruta"
 )
 
+
 def detect_food_category(name: str) -> str:
     n = (name or "").lower()
     for cat, keys in FOOD_CATEGORIES.items():
@@ -107,6 +114,7 @@ def detect_food_category(name: str) -> str:
             if k in n:
                 return cat
     return "unknown"
+
 
 def clamp(v: float | None, lo: float, hi: float) -> float | None:
     if v is None:
@@ -117,7 +125,9 @@ def clamp(v: float | None, lo: float, hi: float) -> float | None:
         return None
     return max(lo, min(hi, x))
 
+
 def sanitize_item(it: "AiItem") -> tuple["AiItem", list[str]]:
+    """Clamp only extreme outliers. Does NOT scale by qty."""
     notes: list[str] = []
     cat = detect_food_category(it.name)
     limits = CATEGORY_LIMITS.get(cat, {})
@@ -135,6 +145,7 @@ def sanitize_item(it: "AiItem") -> tuple["AiItem", list[str]]:
     fix("protein")
     fix("fat")
 
+    # carbs must be >= fiber (if both known)
     if it.carbs is not None:
         try:
             c = float(it.carbs)
@@ -148,37 +159,6 @@ def sanitize_item(it: "AiItem") -> tuple["AiItem", list[str]]:
 
     return it, notes
 
-
-def fix_totals_for_pcs(items: list) -> list[str]:
-    notes = []
-    for it in items:
-        if (it.unit or "").lower() != "pcs":
-            continue
-        if it.qty is None or it.qty <= 1:
-            continue
-
-        cat = detect_food_category(it.name)
-        limits = CATEGORY_LIMITS.get(cat) or {}
-        if not limits:
-            continue
-
-        # проверяем calories/protein/fat как будто они "per 1 pcs"
-        # и если так, масштабируем на qty
-        def maybe_scale(field: str):
-            v = getattr(it, field)
-            if v is None:
-                return
-            if field not in limits:
-                return
-            lo, hi = limits[field]
-            if lo <= float(v) <= hi:
-                setattr(it, field, float(v) * float(it.qty))
-                notes.append(f"{it.name}: {field} умножено на qty={it.qty} (похоже было на 1 шт)")
-
-        maybe_scale("calories")
-        maybe_scale("protein")
-        maybe_scale("fat")
-    return notes
 
 def suspicious_zero_fiber(name: str, fiber, carbs) -> bool:
     if fiber is None:
@@ -194,14 +174,54 @@ def suspicious_zero_fiber(name: str, fiber, carbs) -> bool:
     return any(k in n for k in FIBER_LIKELY)
 
 
+def maybe_flag_per_unit(items: list[AiItem]) -> list[str]:
+    """Heuristic warnings only. No mutation, no scaling.
+
+    If the model accidentally returned per-1pcs values while qty>1, we cannot know for sure.
+    We only add a warning when totals look *too low* compared to a very rough minimum.
+    """
+    notes: list[str] = []
+    for it in items:
+        if (it.unit or "").lower() != "pcs":
+            continue
+        if it.qty is None or it.qty <= 1:
+            continue
+
+        cat = detect_food_category(it.name)
+        limits = CATEGORY_LIMITS.get(cat) or {}
+        if not limits:
+            continue
+
+        def maybe_warn(field: str):
+            v = getattr(it, field)
+            if v is None or field not in limits:
+                return
+            lo, _hi = limits[field]
+            # if total is suspiciously below an extremely rough minimum -> likely per-unit/underestimated
+            try:
+                vv = float(v)
+            except Exception:
+                return
+            if vv < (float(lo) * float(it.qty) * 0.75):
+                notes.append(
+                    f"{it.name}: {field}={vv} при qty={it.qty} выглядит заниженным; возможно ai вернул значение 'за 1 шт'"
+                )
+
+        maybe_warn("calories")
+        maybe_warn("protein")
+        maybe_warn("fat")
+
+    return notes
+
+
 def ai_estimate(text: str, meal_hint: str, profile_hint: dict) -> tuple[list[AiItem], float, dict]:
     prompt = f"""
         You are a nutrition diary assistant.
         Task: parse the user message into items and estimate calories and macros (including fiber).
-        
+
         Profile (may be partial, use only if relevant):
         {json.dumps(profile_hint, ensure_ascii=False)}
-        
+
         Rules:
         - Output JSON only, matching the provided schema.
         - Units: "g", "ml", "pcs", "tbsp", "tsp", "serving"
@@ -219,7 +239,7 @@ def ai_estimate(text: str, meal_hint: str, profile_hint: dict) -> tuple[list[AiI
         - All item names MUST be in the language which the user used to ask.
         - Units MUST be only: "g", "ml", "pcs", "tbsp", "tsp", "serving" (no bottle/cup/etc).
         - Confidence is 0..1.
-        
+
         Meal hint: "{meal_hint}"
 
 User message:
@@ -254,10 +274,11 @@ User message:
         "assumptions": list(data.get("assumptions", []) or []),
         "notes": data.get("notes", ""),
         "raw_ai": data,
-        "prompt_version": "ai_mode_a_ru_week_v4_subscriptions_back_targets_v1",
+        "prompt_version": "ai_mode_a_ru_week_v5_no_qty_autoscale",
         "model": OPENAI_MODEL,
     }
 
+    # Fix suspicious "fiber=0" for likely plant foods: set fiber unknown instead of lying.
     for it in items:
         if suspicious_zero_fiber(it.name, it.fiber, it.carbs):
             it.fiber = None
@@ -273,14 +294,17 @@ User message:
         sanity_notes.extend(notes)
 
     items = clean_items
-    scale_notes = fix_totals_for_pcs(items)
-    if scale_notes:
-        meta["assumptions"].extend(scale_notes)
+
+    # Warn (do not mutate) if totals look suspiciously low for qty>1 pcs.
+    per_unit_warnings = maybe_flag_per_unit(items)
+    if per_unit_warnings:
+        meta["assumptions"].extend(per_unit_warnings)
 
     if sanity_notes:
         meta["assumptions"].extend(sanity_notes)
 
     return items, meta["confidence"], meta
+
 
 def ai_estimate_photo(image_bytes: bytes, image_mime: str, meal_hint: str, profile_hint: dict) -> tuple[list[AiItem], float, dict]:
     b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -313,7 +337,6 @@ Rules:
 Meal hint: "{meal_hint}"
 """.strip()
 
-    # мультимодальный ввод: текст + изображение
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{
@@ -348,7 +371,7 @@ Meal hint: "{meal_hint}"
         "assumptions": list(data.get("assumptions", []) or []),
         "notes": data.get("notes", ""),
         "raw_ai": data,
-        "prompt_version": "ai_mode_photo_v1",
+        "prompt_version": "ai_mode_photo_v2_no_qty_autoscale",
         "model": OPENAI_MODEL,
     }
 
@@ -367,6 +390,11 @@ Meal hint: "{meal_hint}"
         sanity_notes.extend(notes)
 
     items = clean_items
+
+    per_unit_warnings = maybe_flag_per_unit(items)
+    if per_unit_warnings:
+        meta["assumptions"].extend(per_unit_warnings)
+
     if sanity_notes:
         meta["assumptions"].extend(sanity_notes)
 

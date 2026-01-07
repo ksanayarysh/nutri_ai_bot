@@ -5,7 +5,7 @@ def suggest_portion(name: str) -> Optional[Tuple[float, str]]:
     n = (name or "").lower()
 
     if "яйц" in n:
-        return 2, "pcs"
+        return 1, "pcs"
     if "куриц" in n or "котлет" in n or "мяс" in n:
         return 150, "g"
     if "сыр" in n:
@@ -13,6 +13,6 @@ def suggest_portion(name: str) -> Optional[Tuple[float, str]]:
     if "йогурт" in n:
         return 150, "g"
     if "орех" in n:
-        return 20, "g"
+        return 10, "g"
 
     return None

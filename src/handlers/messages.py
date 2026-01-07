@@ -84,10 +84,9 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
     """
     m = MEAL_PREFIX_RE.match(text)
     if not m:
-        return "закуска:", text.strip()
+        return "other", text.strip()
 
     meal = _normalize_meal(m.group("meal"))
-    meal = meal_to_ru(meal)
     body = m.group("body").strip()
     if not body:
         body = text.strip()
@@ -311,7 +310,7 @@ async def _log_food_text(update: Update, context, text: str) -> None:
 
         await msg.reply_text(
             "Записано ✅\n"
-            f"{meal_type}: {body}\n\n"
+            f"{meal_to_ru(meal_type)}: {body}\n\n"
             f"Оценка: {macros.calories:.0f} ккал | "
             f"Б {macros.protein:.1f} / Ж {macros.fat:.1f} / У {macros.carbs:.1f} "
             f"(клетч {macros.fiber:.1f}, чистые {net:.1f})\n\n"
@@ -323,7 +322,7 @@ async def _log_food_text(update: Update, context, text: str) -> None:
         print("fail")
         await msg.reply_text(
             "Записано ✅\n"
-            f"{meal_type}: {body}\n\n"
+            f"{meal_to_ru(meal_type)}: {body}\n\n"
             "Я пока записала без КБЖУ (AI-модуль не подключён или не смог оценить)."
         )
 
