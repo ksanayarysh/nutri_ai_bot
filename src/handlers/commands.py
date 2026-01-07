@@ -721,4 +721,34 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"Чистые углеводы: {net_carbs:.1f} г"
     )
 
+
     await msg.reply_text("\n".join(lines))
+
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user or not update.message:
+        return
+
+    await update.message.reply_text(
+        f"🆔 Твой ID:\n\n"
+        f"`{user.id}`\n\n"
+        f"Используй этот ID при оплате или напиши его администратору.",
+        parse_mode="Markdown"
+    )
+
+
+async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if not update.message:
+        return
+
+    context.user_data["contact_mode"] = True
+
+    await update.message.reply_text(
+        "📩 Напиши сообщение, и я перешлю его администратору.\n"
+        "Чтобы отменить — напиши /cancel"
+    )
+
+async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    context.user_data.pop("contact_mode", None)
+    if update.message:
+        await update.message.reply_text("❌ Отменено.")

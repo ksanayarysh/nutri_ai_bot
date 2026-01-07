@@ -679,3 +679,31 @@ async def _save_items_and_reply(
         )
 
     await msg.reply_text("\n".join(lines))
+
+
+async def contact_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not context.user_data.get("contact_mode"):
+        return  # это не контактный режим
+
+    text = msg.text or ""
+
+    # пересылаем тебе
+    await context.bot.send_message(
+        chat_id=ADMIN_USER_ID,
+        text=(
+            "📩 Сообщение от пользователя\n\n"
+            f"ID: {user.id}\n"
+            f"Username: @{user.username}\n"
+            f"Имя: {user.first_name}\n\n"
+            f"Текст:\n{text}"
+        )
+    )
+
+    context.user_data["contact_mode"] = False
+
+    await msg.reply_text("✅ Сообщение отправлено администратору.")
