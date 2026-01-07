@@ -256,44 +256,38 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     day = today_str()
 
     macros: Optional[Macros] = None
-    confidence: Optional[float] = None
-    meta: dict = {"assumptions": []}
 
-    # --- AI (optional) ---
-    # Expectation: ai_estimate(text=..., meal_hint=..., profile_hint=...) -> (items, confidence, meta)
-    # Where each item has: calories/protein/fat/carbs/fiber (+ optionally name/qty/unit)
-    if "ai_estimate" in globals() and callable(globals().get("ai_estimate")):
-        try:
-            replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
-            profile_hint = build_profile_hint({"user_id": user.id})
+    try:
+        replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
+        profile_hint = build_profile_hint({"user_id": user.id})
 
-            items, confidence, meta = ai_estimate(
-                text=replaced_text,
-                meal_hint=meal_type,
-                profile_hint=profile_hint,
+        items, confidence, meta = ai_estimate(
+            text=replaced_text,
+            meal_hint=meal_type,
+            profile_hint=profile_hint,
+        )
+
+        meta = meta or {"assumptions": []}
+        meta.setdefault("assumptions", [])
+        if alias_notes:
+            meta["assumptions"].extend(alias_notes)
+
+        if items:
+            cal = sum(float(getattr(it, "calories", 0) or 0) for it in items)
+            pro = sum(float(getattr(it, "protein", 0) or 0) for it in items)
+            fat = sum(float(getattr(it, "fat", 0) or 0) for it in items)
+            car = sum(float(getattr(it, "carbs", 0) or 0) for it in items)
+            fib = sum(float(getattr(it, "fiber", 0) or 0) for it in items)
+
+            macros = Macros(
+                calories=cal,
+                protein=pro,
+                fat=fat,
+                carbs=car,
+                fiber=fib,
             )
-
-            meta = meta or {"assumptions": []}
-            meta.setdefault("assumptions", [])
-            if alias_notes:
-                meta["assumptions"].extend(alias_notes)
-
-            if items:
-                cal = sum(float(getattr(it, "calories", 0) or 0) for it in items)
-                pro = sum(float(getattr(it, "protein", 0) or 0) for it in items)
-                fat = sum(float(getattr(it, "fat", 0) or 0) for it in items)
-                car = sum(float(getattr(it, "carbs", 0) or 0) for it in items)
-                fib = sum(float(getattr(it, "fiber", 0) or 0) for it in items)
-
-                macros = Macros(
-                    calories=cal,
-                    protein=pro,
-                    fat=fat,
-                    carbs=car,
-                    fiber=fib,
-                )
-        except Exception:
-            macros = None
+    except Exception:
+        macros = None
 
     # --- Save ---
     insert_entry(user.id, day, meal_type, body, macros)
