@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from src.ai import ai_estimate
+from datetime import datetime, timezone
 from src.config import MEAL_ALIASES
 from src.food_structure.food import Macros
 import json
@@ -93,36 +94,95 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
         body = text.strip()
     return meal, body
 
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+_MEAL_MAP = {
+    # canonical
+    "breakfast": "breakfast",
+    "lunch": "lunch",
+    "dinner": "dinner",
+    "snack": "snack",
+    "other": "other",
+
+    # RU (и твои “закуска:”)
+    "завтрак": "breakfast",
+    "обед": "lunch",
+    "ужин": "dinner",
+    "перекус": "snack",
+    "закуска": "snack",
+    "другое": "other",
+    "прочее": "other",
+}
+
+def _f(x, default: float | None = None) -> float | None:
+    if x is None:
+        return default
+    try:
+        return float(x)
+    except Exception:
+        return default
+
 def insert_entry(
     user_id: int,
     day: str,
     meal_type: str,
     text: str,
-    macros: Optional[Macros],
+    macros: Optional["Macros"],
 ) -> None:
-    print(macros)
+    """
+    Пишет ОДНУ запись в entries:
+    - meal = canonical (breakfast/lunch/dinner/snack/other)
+    - raw_text = оригинальный текст
+    - если macros есть: item_name/qty/unit + макросы
+    - если macros нет: макросы NULL (и это нормально)
+    """
+    meal = _normalize_meal(meal_type)
+    raw_text = (text or "").strip()
+
+    item_name = None
+    qty = None
+    unit = None
+    calories = None
+    protein = None
+    fat = None
+    carbs = None
+    fiber = None
+
+    if macros is not None:
+        item_name = (getattr(macros, "name", None) or "").strip() or None
+        qty = _f(getattr(macros, "qty", None), 1.0)  # если qty не пришёл, пусть будет 1
+        unit = (getattr(macros, "unit", None) or "serving").strip()
+
+        calories = _f(getattr(macros, "calories", None), 0.0)
+        protein = _f(getattr(macros, "protein", None), 0.0)
+        fat     = _f(getattr(macros, "fat", None), 0.0)
+        carbs   = _f(getattr(macros, "carbs", None), 0.0)
+        fiber   = _f(getattr(macros, "fiber", None), 0.0)
+
     with db() as conn:
         cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO entries
-              (user_id, entry_date, meal, raw_text, calories, protein, fat, carbs, fiber, created_at)
+              (user_id, entry_date, meal, raw_text,
+               item_name, qty, unit,
+               calories, protein, fat, carbs, fiber,
+               created_at)
             VALUES
-              (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+              (%s, %s, %s, %s,
+               %s, %s, %s,
+               %s, %s, %s, %s, %s,
+               %s)
             """,
             (
-                user_id,
-                day,
-                meal_type,
-                text,
-                None if macros is None else macros.calories,
-                None if macros is None else macros.protein,
-                None if macros is None else macros.fat,
-                None if macros is None else macros.carbs,
-                None if macros is None else getattr(macros, "fiber", None),
-                now_iso(),
+                user_id, day, meal, raw_text,
+                item_name, qty, unit,
+                calories, protein, fat, carbs, fiber,
+                _now_iso(),  # или now_iso(), если есть
             ),
         )
+        conn.commit()
 
 def get_day_totals(user_id: int, day: str) -> Macros:
     with db() as conn:
