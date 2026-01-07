@@ -136,11 +136,13 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # Группируем по приёму пищи
     meals: dict[str, list[str]] = {}
+    i = 1
     for meal, name, qty, unit, cal, p, f, c, fi in rows:
         meals.setdefault(meal or "закуска", []).append(
-            f"• {name} — {qty:g} {UNIT_LABELS[unit]} "
+            f"•{i} {name} — {qty:g} {UNIT_LABELS[unit]} "
             f"({cal:.0f} ккал, Б {p:.1f}, Ж {f:.1f}, У {c:.1f})"
         )
+        i += 1
 
     lines = ["📋 Сегодня ты съела:"]
     for meal, items in meals.items():
