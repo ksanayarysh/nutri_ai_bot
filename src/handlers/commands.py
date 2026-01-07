@@ -335,7 +335,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             """
             SELECT
               COUNT(DISTINCT entry_date) as days_logged,
-              COALESCE(SUM(kcal), 0),
+              COALESCE(SUM(calories), 0),
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
               COALESCE(SUM(carbs), 0),
