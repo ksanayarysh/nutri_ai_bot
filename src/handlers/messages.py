@@ -308,7 +308,7 @@ async def _handle_payment_proof_photo(
 
 from typing import Optional
 
-async def _log_food_text(update: Update, context, text: str) -> None:
+async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     user = update.effective_user
     msg = update.effective_message
     if not user or not msg:
@@ -316,8 +316,6 @@ async def _log_food_text(update: Update, context, text: str) -> None:
 
     meal_type, body = parse_meal_and_body(text)
     day = today_str()
-
-    macros: Optional[Macros] = None
 
     try:
         replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
@@ -328,64 +326,30 @@ async def _log_food_text(update: Update, context, text: str) -> None:
             meal_hint=meal_type,
             profile_hint=profile_hint,
         )
+    except Exception as e:
+        await msg.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
+        return
 
-        print(items, confidence, meta)
+    meta = meta or {"assumptions": []}
+    meta.setdefault("assumptions", [])
+    if alias_notes:
+        meta["assumptions"].extend(alias_notes)
 
-        meta = meta or {"assumptions": []}
-        meta.setdefault("assumptions", [])
-        if alias_notes:
-            meta["assumptions"].extend(alias_notes)
+    if not items:
+        await msg.reply_text("Не смогла распознать еду в сообщении. Напиши чуть подробнее.")
+        return
 
-        if items:
-            print("мы зашли внутрь")
-            cal = sum(float(getattr(it, "calories", 0) or 0) for it in items)
-            pro = sum(float(getattr(it, "protein", 0) or 0) for it in items)
-            fat = sum(float(getattr(it, "fat", 0) or 0) for it in items)
-            car = sum(float(getattr(it, "carbs", 0) or 0) for it in items)
-            fib = sum(float(getattr(it, "fiber", 0) or 0) for it in items)
-
-            macros = Macros(
-                name="",
-                qty=0,
-                unit="",
-                calories=cal,
-                protein=pro,
-                fat=fat,
-                carbs=car,
-                fiber=fib,
-            )
-            print(macros)
-    except Exception:
-        macros = None
-
-    # --- Save ---
-    insert_entry(user.id, day, meal_type, body, macros)
-
-    # --- Totals + reply ---
-    totals = get_day_totals(user.id, day)
-
-    if macros:
-        print("uhu")
-        net = max(0.0, float(macros.carbs) - float(macros.fiber))
-        total_net = max(0.0, float(totals.carbs) - float(totals.fiber))
-
-        await msg.reply_text(
-            "Записано ✅\n"
-            f"{meal_to_ru(meal_type)}: {body}\n\n"
-            f"Оценка: {macros.calories:.0f} ккал | "
-            f"Б {macros.protein:.1f} / Ж {macros.fat:.1f} / У {macros.carbs:.1f} "
-            f"(клетч {macros.fiber:.1f}, чистые {net:.1f})\n\n"
-            f"Сегодня всего: {totals.calories:.0f} ккал | "
-            f"Б {totals.protein:.1f} / Ж {totals.fat:.1f} / У {totals.carbs:.1f} "
-            f"(клетч {totals.fiber:.1f}, чистые {total_net:.1f})"
-        )
-    else:
-        print("fail")
-        await msg.reply_text(
-            "Записано ✅\n"
-            f"{meal_to_ru(meal_type)}: {body}\n\n"
-            "Я пока записала без КБЖУ (AI-модуль не подключён или не смог оценить)."
-        )
+    # сохраняем КАЖДЫЙ item отдельной строкой (это то, что нужно для /today списка)
+    await _save_items_and_reply(
+        update=update,
+        uid=user.id,
+        day=day,
+        meal=_normalize_meal(meal_type),
+        raw_text=body,
+        items=items,
+        confidence=confidence,
+        meta=meta,
+    )
 
 
 async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
