@@ -189,12 +189,12 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     ]
 
     if subscribed_until:
-        lines.append(f"Paid until: {subscribed_until}")
+        lines.append(f"Оплачено до: {subscribed_until}")
     elif trial_until:
-        lines.append(f"Trial until: {trial_until}")
+        lines.append(f"Бесплатный период до: {trial_until}")
 
     if t:
-        calories, protein, fat, carbs, net_carbs, mode, updated_at = t
+        calories, protein, fat, carbs, fiber, mode, updated_at = t
         lines += [
             "",
             "🎯 Цели:",
@@ -203,7 +203,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"- Белки: {float(protein):.1f} г" if protein is not None else "- Белки: —",
             f"- Жиры: {float(fat):.1f} г" if fat is not None else "- Жиры: —",
             f"- Углеводы: {float(carbs):.1f} г" if carbs is not None else "- Углеводы: —",
-            f"- Net carbs: {float(net_carbs):.1f} г" if net_carbs is not None else "- Net carbs: —",
+            f"- Клетчатка: {float(fiber):.1f} г" if fiber is not None else "- Net carbs: —",
             f"- Обновлено: {updated_at or '—'}",
         ]
     else:
