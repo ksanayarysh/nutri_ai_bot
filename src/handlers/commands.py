@@ -87,27 +87,6 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cur.execute(
             """
             SELECT
-              meal,
-              item_name,
-              qty,
-              unit,
-              calories,
-              protein,
-              fat,
-              carbs,
-              fiber
-            FROM entries
-            WHERE user_id = %s AND entry_date = %s
-            ORDER BY meal, id
-            """,
-            (user.id, day),
-        )
-        rows = cur.fetchall()
-
-        # 2️⃣ Итоги
-        cur.execute(
-            """
-            SELECT
               COALESCE(meal, 'other')      AS meal,
               COALESCE(item_name, '')      AS item_name,
               COALESCE(qty, 1)             AS qty,
@@ -125,6 +104,20 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         rows = cur.fetchall()
 
+        # 2️⃣ Итоги
+        cur.execute(
+            """
+            SELECT
+              COALESCE(SUM(calories), 0),
+              COALESCE(SUM(protein), 0),
+              COALESCE(SUM(fat), 0),
+              COALESCE(SUM(carbs), 0),
+              COALESCE(SUM(fiber), 0)
+            FROM entries
+            WHERE user_id = %s AND entry_date = %s
+            """,
+            (user.id, day),
+        )
         calories, protein, fat, carbs, fiber = cur.fetchone()
 
     if not rows:
@@ -342,7 +335,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             """
             SELECT
               COUNT(DISTINCT entry_date) as days_logged,
-              COALESCE(SUM(calories), 0),
+              COALESCE(SUM(kcal), 0),
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
               COALESCE(SUM(carbs), 0),
