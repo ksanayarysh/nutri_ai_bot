@@ -246,7 +246,7 @@ async def _handle_payment_proof_photo(
 
 from typing import Optional
 
-async def _log_food_text(update: Update, text: str) -> None:
+async def _log_food_text(update: Update, context, text: str) -> None:
     user = update.effective_user
     msg = update.effective_message
     if not user or not msg:
