@@ -172,7 +172,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         # targets
         cur.execute(
             """
-            SELECT calories, protein, fat, carbs, net_carbs, mode, updated_at
+            SELECT kcal, protein, fat, carbs, fiber, diet, updated_at
             FROM targets
             WHERE user_id = %s
             """,
