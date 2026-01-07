@@ -119,7 +119,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(fiber, 0)           AS fiber
             FROM entries
             WHERE user_id = %s AND entry_date = %s
-            ORDER BY meal_type, id
+            ORDER BY meal, id
             """,
             (user.id, day),
         )
