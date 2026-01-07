@@ -84,9 +84,10 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
     """
     m = MEAL_PREFIX_RE.match(text)
     if not m:
-        return "other", text.strip()
+        return "закуска:", text.strip()
 
     meal = _normalize_meal(m.group("meal"))
+    meal = meal_to_ru(meal)
     body = m.group("body").strip()
     if not body:
         body = text.strip()
