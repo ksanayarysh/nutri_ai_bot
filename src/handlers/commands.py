@@ -103,7 +103,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Белки: {protein:.1f} г\n"
         f"Жиры: {fat:.1f} г\n"
         f"Углеводы: {carbs:.1f} г\n"
-        f"Net carbs: {net_carbs:.1f} г"
+        f"Чистые углеводы: {net_carbs:.1f} г"
     )
 
 
@@ -270,12 +270,10 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not user or not update.message:
         return
 
-    # анализ можно оставить под подпиской
     if not is_subscribed(user.id):
         await update.message.reply_text("⏳ Анализ доступен по подписке. Используй /pay")
         return
 
-    # период: 7 дней по умолчанию, можно /analyze 14
     days = 7
     if context.args:
         try:
@@ -292,7 +290,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         cur.execute(
             """
             SELECT
-              COUNT(DISTINCT day) as days_logged,
+              COUNT(DISTINCT entry_day) as days_logged,
               COALESCE(SUM(calories), 0),
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
