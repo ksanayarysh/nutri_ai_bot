@@ -246,7 +246,7 @@ async def _handle_payment_proof_photo(
 
 from typing import Optional
 
-async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+async def _log_food_text(update: Update, text: str) -> None:
     user = update.effective_user
     msg = update.effective_message
     if not user or not msg:
@@ -266,6 +266,8 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
             meal_hint=meal_type,
             profile_hint=profile_hint,
         )
+
+        print(items, confidence, meta)
 
         meta = meta or {"assumptions": []}
         meta.setdefault("assumptions", [])
