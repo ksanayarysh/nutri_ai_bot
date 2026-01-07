@@ -432,3 +432,52 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         ]
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+
+async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not context.args:
+        await msg.reply_text("❌ Укажи номер записи. Например: /del 1")
+        return
+
+    try:
+        idx = int(context.args[0])
+        if idx <= 0:
+            raise ValueError
+    except ValueError:
+        await msg.reply_text("❌ Номер должен быть положительным числом.")
+        return
+
+    day = today_str()
+
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, item_name
+            FROM entries
+            WHERE user_id = %s
+              AND entry_date = %s
+              AND item_name IS NOT NULL
+            ORDER BY id
+            """,
+            (user.id, day),
+        )
+        rows = cur.fetchall()
+
+        if idx > len(rows):
+            await msg.reply_text("❌ Нет записи с таким номером.")
+            return
+
+        entry_id, name = rows[idx - 1]
+
+        cur.execute(
+            "DELETE FROM entries WHERE id = %s",
+            (entry_id,),
+        )
+        conn.commit()
+
+    await msg.reply_text(f"🗑 Удалила запись: {name}")

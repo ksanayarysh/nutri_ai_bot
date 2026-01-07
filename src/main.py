@@ -15,7 +15,8 @@ from src.config import TELEGRAM_TOKEN
 from src.db import init_db
 from src.logging_setup import setup_logging
 from src.payments import on_paidproof_callback, cmd_pay
-from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets
+from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets, \
+    cmd_del
 from src.handlers.messages import on_text, on_photo, on_new_members
 
 try:
@@ -47,6 +48,8 @@ def build_app():
     app.add_handler(CommandHandler("profile", cmd_profile))
     app.add_handler(CommandHandler("set_targets", cmd_set_targets))
     app.add_handler(CommandHandler("analyze", cmd_analyze))
+
+    app.add_handler(CommandHandler("del", cmd_del))
 
     # 3) messages
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
