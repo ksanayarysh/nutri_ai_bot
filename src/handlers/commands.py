@@ -4,7 +4,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.ai import ai_estimate
+from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.bot import meal_to_ru
 from src.db import ensure_user
 from src.profile import build_profile_hint
@@ -585,7 +585,140 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         conn.commit()
 
-    text = f"✅ Обновила запись #{idx}: {it.name} — {it.qty:g} {it.unit} ({(it.calories or 0):.0f} ккал)"
+    text = f"✅ Обновила запись #{idx}: {it.name} — {it.qty:g} {UNIT_LABELS[it.unit]} ({(it.calories or 0):.0f} ккал)"
     if warn_multi:
         text += "\n⚠️ AI распознал несколько продуктов, я обновила только первый."
     await msg.reply_text(text)
+
+
+async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not is_subscribed(user.id):
+        await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
+        return
+
+    day = today_str()
+
+    with db() as conn:
+        cur = conn.cursor()
+
+        # берём нормальные строки (без legacy-мусора)
+        cur.execute(
+            """
+            SELECT
+              COALESCE(meal, 'other') AS meal,
+              COALESCE(item_name, '') AS item_name,
+              COALESCE(qty, 1)        AS qty,
+              COALESCE(unit, 'serving') AS unit,
+              COALESCE(calories, 0)   AS calories,
+              COALESCE(protein, 0)    AS protein,
+              COALESCE(fat, 0)        AS fat,
+              COALESCE(carbs, 0)      AS carbs,
+              COALESCE(fiber, 0)      AS fiber
+            FROM entries
+            WHERE user_id = %s
+              AND entry_date = %s
+              AND item_name IS NOT NULL
+              AND item_name <> ''
+            ORDER BY id
+            """,
+            (user.id, day),
+        )
+        rows = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT
+              COALESCE(SUM(calories), 0),
+              COALESCE(SUM(protein), 0),
+              COALESCE(SUM(fat), 0),
+              COALESCE(SUM(carbs), 0),
+              COALESCE(SUM(fiber), 0)
+            FROM entries
+            WHERE user_id = %s AND entry_date = %s
+              AND item_name IS NOT NULL AND item_name <> ''
+            """,
+            (user.id, day),
+        )
+        calories, protein, fat, carbs, fiber = cur.fetchone()
+
+    if not rows:
+        await msg.reply_text("📭 За сегодня пока нет записей для анализа.")
+        return
+
+    net_carbs = max(float(carbs) - float(fiber), 0.0)
+
+    items_for_ai = []
+    for meal, name, qty, unit, cal, p, f, c, fi in rows:
+        items_for_ai.append({
+            "meal": meal,
+            "name": name,
+            "qty": float(qty) if qty is not None else 1.0,
+            "unit": unit,
+            "calories": float(cal or 0),
+            "protein": float(p or 0),
+            "fat": float(f or 0),
+            "carbs": float(c or 0),
+            "fiber": float(fi or 0),
+        })
+
+    totals_for_ai = {
+        "calories": float(calories or 0),
+        "protein": float(protein or 0),
+        "fat": float(fat or 0),
+        "carbs": float(carbs or 0),
+        "fiber": float(fiber or 0),
+        "net_carbs": float(net_carbs),
+    }
+
+    try:
+        profile_hint = build_profile_hint({"user_id": user.id})
+        analysis = ai_daily_analysis_ru(
+            profile_hint=profile_hint,
+            day=day,
+            totals=totals_for_ai,
+            items=items_for_ai,
+        )
+    except Exception as e:
+        await msg.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
+        return
+
+    # красивый вывод
+    lines = ["🧠 Анализ дня (AI):", f"• {analysis['headline']}"]
+
+    good = analysis.get("good") or []
+    improve = analysis.get("improve") or []
+    plan = analysis.get("plan") or []
+    warnings = analysis.get("warnings") or []
+
+    if good:
+        lines.append("\n✅ Что хорошо:")
+        lines.extend([f"• {x}" for x in good])
+
+    if improve:
+        lines.append("\n🛠 Что улучшить:")
+        lines.extend([f"• {x}" for x in improve])
+
+    if plan:
+        lines.append("\n📌 План на завтра:")
+        lines.extend([f"• {x}" for x in plan])
+
+    if warnings:
+        lines.append("\n⚠️ Предупреждения:")
+        lines.extend([f"• {x}" for x in warnings])
+
+    lines.append(
+        "\n📊 Итоги:\n"
+        f"Ккал: {float(calories):.0f}\n"
+        f"Белки: {float(protein):.1f} г\n"
+        f"Жиры: {float(fat):.1f} г\n"
+        f"Углеводы: {float(carbs):.1f} г\n"
+        f"Клетчатка: {float(fiber):.1f} г\n"
+        f"Чистые углеводы: {net_carbs:.1f} г"
+    )
+
+    await msg.reply_text("\n".join(lines))

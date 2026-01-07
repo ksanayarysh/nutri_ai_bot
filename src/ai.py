@@ -399,3 +399,38 @@ Meal hint: "{meal_hint}"
         meta["assumptions"].extend(sanity_notes)
 
     return items, meta["confidence"], meta
+
+def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: list[dict]) -> dict:
+    """
+    totals: {"calories":..., "protein":..., "fat":..., "carbs":..., "fiber":..., "net_carbs":...}
+    items: [{"meal":..., "name":..., "qty":..., "unit":..., "calories":..., "protein":..., "fat":..., "carbs":..., "fiber":...}, ...]
+    """
+    prompt = f"""
+Ты — нутри-ассистент. Сделай краткий анализ дня (на русском), дружелюбно и практично.
+Пиши по делу, без лекций.
+
+Профиль:
+{json.dumps(profile_hint, ensure_ascii=False)}
+
+День: {day}
+
+Съедено (список):
+{json.dumps(items, ensure_ascii=False)}
+
+Итоги:
+{json.dumps(totals, ensure_ascii=False)}
+
+Требования:
+- Верни JSON строго по схеме.
+- Советуй конкретные действия (что добавить/заменить/как улучшить завтра).
+- Учитывай низкоуглеводный стиль питания.
+- Не придумывай медицинские диагнозы.
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": _analysis_json_schema_ru()},
+        temperature=0.4,
+    )
+    return json.loads(resp.choices[0].message.content)
