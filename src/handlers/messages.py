@@ -99,6 +99,7 @@ def insert_entry(
     text: str,
     macros: Optional[Macros],
 ) -> None:
+    print(macros)
     with db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -275,6 +276,7 @@ async def _log_food_text(update: Update, context, text: str) -> None:
             meta["assumptions"].extend(alias_notes)
 
         if items:
+            print("мы зашли внутрь")
             cal = sum(float(getattr(it, "calories", 0) or 0) for it in items)
             pro = sum(float(getattr(it, "protein", 0) or 0) for it in items)
             fat = sum(float(getattr(it, "fat", 0) or 0) for it in items)
@@ -282,12 +284,16 @@ async def _log_food_text(update: Update, context, text: str) -> None:
             fib = sum(float(getattr(it, "fiber", 0) or 0) for it in items)
 
             macros = Macros(
+                name="",
+                qty=0,
+                unit="",
                 calories=cal,
                 protein=pro,
                 fat=fat,
                 carbs=car,
                 fiber=fib,
             )
+            print(macros)
     except Exception:
         macros = None
 
@@ -298,6 +304,7 @@ async def _log_food_text(update: Update, context, text: str) -> None:
     totals = get_day_totals(user.id, day)
 
     if macros:
+        print("uhu")
         net = max(0.0, float(macros.carbs) - float(macros.fiber))
         total_net = max(0.0, float(totals.carbs) - float(totals.fiber))
 
@@ -312,6 +319,7 @@ async def _log_food_text(update: Update, context, text: str) -> None:
             f"(клетч {totals.fiber:.1f}, net {total_net:.1f})"
         )
     else:
+        print("fail")
         await msg.reply_text(
             "Записано ✅\n"
             f"{meal_type}: {body}\n\n"
