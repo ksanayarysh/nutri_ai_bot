@@ -314,10 +314,10 @@ async def _log_food_text(update: Update, context, text: str) -> None:
             f"{meal_type}: {body}\n\n"
             f"Оценка: {macros.calories:.0f} ккал | "
             f"Б {macros.protein:.1f} / Ж {macros.fat:.1f} / У {macros.carbs:.1f} "
-            f"(клетч {macros.fiber:.1f}, net {net:.1f})\n\n"
+            f"(клетч {macros.fiber:.1f}, чистые {net:.1f})\n\n"
             f"Сегодня всего: {totals.calories:.0f} ккал | "
             f"Б {totals.protein:.1f} / Ж {totals.fat:.1f} / У {totals.carbs:.1f} "
-            f"(клетч {totals.fiber:.1f}, net {total_net:.1f})"
+            f"(клетч {totals.fiber:.1f}, чистые {total_net:.1f})"
         )
     else:
         print("fail")
