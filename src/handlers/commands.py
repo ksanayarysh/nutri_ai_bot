@@ -87,7 +87,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cur.execute(
             """
             SELECT
-              meal_type,
+              meal,
               item_name,
               qty,
               unit,
