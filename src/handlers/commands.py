@@ -4,8 +4,10 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from src.ai import ai_estimate
 from src.bot import meal_to_ru
 from src.db import ensure_user
+from src.profile import build_profile_hint
 from src.subscriptions import ensure_trial_subscription
 from src.config import PRICE_TEXT
 
@@ -481,3 +483,109 @@ async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         conn.commit()
 
     await msg.reply_text(f"🗑 Удалила запись: {name}")
+
+async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if len(context.args) < 2:
+        await msg.reply_text("❌ Формат: /edit <номер> <новый текст>\nНапример: /edit 1 яйцо 2 шт")
+        return
+
+    # 1) номер
+    try:
+        idx = int(context.args[0])
+        if idx <= 0:
+            raise ValueError
+    except ValueError:
+        await msg.reply_text("❌ Номер должен быть положительным числом.")
+        return
+
+    new_text = " ".join(context.args[1:]).strip()
+    if not new_text:
+        await msg.reply_text("❌ Новый текст пустой.")
+        return
+
+    day = today_str()
+
+    # 2) найти запись по номеру (как в /del)
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, meal, raw_text
+            FROM entries
+            WHERE user_id = %s
+              AND entry_date = %s
+              AND item_name IS NOT NULL
+            ORDER BY id
+            """,
+            (user.id, day),
+        )
+        rows = cur.fetchall()
+
+        if idx > len(rows):
+            await msg.reply_text("❌ Нет записи с таким номером.")
+            return
+
+        entry_id, meal, old_raw = rows[idx - 1]
+
+    # 3) прогнать ai_estimate по новому тексту (ожидаем 1 item)
+    try:
+        profile_hint = build_profile_hint({"user_id": user.id})
+        items, confidence, meta = ai_estimate(
+            text=new_text,
+            meal_hint=meal or "other",
+            profile_hint=profile_hint,
+        )
+    except Exception as e:
+        await msg.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
+        return
+
+    if not items:
+        await msg.reply_text("❌ Не смогла распознать еду. Попробуй написать иначе.")
+        return
+
+    # Если AI вернул несколько items, это двусмысленно. Берём первый и предупреждаем.
+    it = items[0]
+    warn_multi = len(items) > 1
+
+    # 4) обновить запись
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE entries
+            SET raw_text = %s,
+                item_name = %s,
+                qty = %s,
+                unit = %s,
+                calories = %s,
+                protein = %s,
+                fat = %s,
+                carbs = %s,
+                fiber = %s
+            WHERE id = %s AND user_id = %s
+            """,
+            (
+                new_text,
+                it.name,
+                it.qty,
+                it.unit,
+                it.calories,
+                it.protein,
+                it.fat,
+                it.carbs,
+                it.fiber,
+                entry_id,
+                user.id,
+            ),
+        )
+        conn.commit()
+
+    text = f"✅ Обновила запись #{idx}: {it.name} — {it.qty:g} {it.unit} ({(it.calories or 0):.0f} ккал)"
+    if warn_multi:
+        text += "\n⚠️ AI распознал несколько продуктов, я обновила только первый."
+    await msg.reply_text(text)
