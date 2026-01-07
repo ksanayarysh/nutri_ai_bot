@@ -247,7 +247,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             f"- Белки: {float(protein):.1f} г" if protein is not None else "- Белки: —",
             f"- Жиры: {float(fat):.1f} г" if fat is not None else "- Жиры: —",
             f"- Углеводы: {float(carbs):.1f} г" if carbs is not None else "- Углеводы: —",
-            f"- Клетчатка: {float(fiber):.1f} г" if fiber is not None else "- Net carbs: —",
+            f"- Клетчатка: {float(fiber):.1f} г" if fiber is not None else "- Чистые углеводы: —",
             f"- Обновлено: {updated_at or '—'}",
         ]
     else:
@@ -379,7 +379,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         f"- Белки: {avg_p:.1f} г",
         f"- Жиры: {avg_f:.1f} г",
         f"- Углеводы: {avg_c:.1f} г",
-        f"- Net carbs: {avg_nc:.1f} г",
+        f"- Чистые углеводы: {avg_nc:.1f} г",
     ]
 
     if t:
