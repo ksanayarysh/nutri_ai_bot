@@ -172,7 +172,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cur.execute(
             """
             SELECT
-              COUNT(DISTINCT day),
+              COUNT(DISTINCT entry_date),
               COALESCE(SUM(calories), 0),
               COALESCE(SUM(protein), 0),
               COALESCE(SUM(fat), 0),
