@@ -180,7 +180,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s
-              AND entry_date >= CURRENT_DATE - INTERVAL '7 days'
+              AND entry_date::date >= CURRENT_DATE - INTERVAL '7 days'
             """,
             (user.id,),
         )
