@@ -4,6 +4,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from src.bot import meal_to_ru
 from src.db import ensure_user
 from src.subscriptions import ensure_trial_subscription
 from src.config import PRICE_TEXT
@@ -12,6 +13,15 @@ from datetime import datetime, timedelta
 from src.config import TZ
 from src.db import db, today_str
 from src.subscriptions import is_subscribed
+
+UNIT_LABELS = {
+    "pcs": "шт",
+    "g": "г",
+    "ml": "мл",
+    "tbsp": "ст.л.",
+    "tsp": "ч.л.",
+    "serving": "порц.",
+}
 
 
 # -------------------------
@@ -127,14 +137,14 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Группируем по приёму пищи
     meals: dict[str, list[str]] = {}
     for meal, name, qty, unit, cal, p, f, c, fi in rows:
-        meals.setdefault(meal or "other", []).append(
-            f"• {name} — {qty:g} {unit} "
+        meals.setdefault(meal or "закуска", []).append(
+            f"• {name} — {qty:g} {UNIT_LABELS[unit]} "
             f"({cal:.0f} ккал, Б {p:.1f}, Ж {f:.1f}, У {c:.1f})"
         )
 
     lines = ["📋 Сегодня ты съела:"]
     for meal, items in meals.items():
-        lines.append(f"\n🍽 {meal}")
+        lines.append(f"\n🍽 {meal_to_ru(meal)}")
         lines.extend(items)
 
     net_carbs = max(carbs - fiber, 0)
