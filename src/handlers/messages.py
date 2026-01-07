@@ -244,9 +244,11 @@ async def _handle_payment_proof_photo(
 # Food logging routing (MVP)
 # -------------------------
 
+from typing import Optional
+
 async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     user = update.effective_user
-    msg = update.message
+    msg = update.effective_message
     if not user or not msg:
         return
 
@@ -254,30 +256,64 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     day = today_str()
 
     macros: Optional[Macros] = None
-    if estimate_from_text:
+    confidence: Optional[float] = None
+    meta: dict = {"assumptions": []}
+
+    # --- AI (optional) ---
+    # Expectation: ai_estimate(text=..., meal_hint=..., profile_hint=...) -> (items, confidence, meta)
+    # Where each item has: calories/protein/fat/carbs/fiber (+ optionally name/qty/unit)
+    if "ai_estimate" in globals() and callable(globals().get("ai_estimate")):
         try:
-            est = await estimate_from_text(body)  # expected dict-like
-            macros = Macros(
-                calories=float(est.get("calories", 0)),
-                protein=float(est.get("protein", 0)),
-                fat=float(est.get("fat", 0)),
-                carbs=float(est.get("carbs", 0)),
-                fiber=float(est.get("net_carbs", est.get("carbs", 0))),
+            replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
+            profile_hint = build_profile_hint({"user_id": user.id})
+
+            items, confidence, meta = ai_estimate(
+                text=replaced_text,
+                meal_hint=meal_type,
+                profile_hint=profile_hint,
             )
+
+            meta = meta or {"assumptions": []}
+            meta.setdefault("assumptions", [])
+            if alias_notes:
+                meta["assumptions"].extend(alias_notes)
+
+            if items:
+                cal = sum(float(getattr(it, "calories", 0) or 0) for it in items)
+                pro = sum(float(getattr(it, "protein", 0) or 0) for it in items)
+                fat = sum(float(getattr(it, "fat", 0) or 0) for it in items)
+                car = sum(float(getattr(it, "carbs", 0) or 0) for it in items)
+                fib = sum(float(getattr(it, "fiber", 0) or 0) for it in items)
+
+                macros = Macros(
+                    calories=cal,
+                    protein=pro,
+                    fat=fat,
+                    carbs=car,
+                    fiber=fib,
+                )
         except Exception:
             macros = None
 
+    # --- Save ---
     insert_entry(user.id, day, meal_type, body, macros)
 
+    # --- Totals + reply ---
     totals = get_day_totals(user.id, day)
+
     if macros:
+        net = max(0.0, float(macros.carbs) - float(macros.fiber))
+        total_net = max(0.0, float(totals.carbs) - float(totals.fiber))
+
         await msg.reply_text(
             "Записано ✅\n"
             f"{meal_type}: {body}\n\n"
             f"Оценка: {macros.calories:.0f} ккал | "
-            f"Б {macros.protein:.1f} / Ж {macros.fat:.1f} / У {macros.carbs:.1f} (net {macros.net_carbs:.1f})\n\n"
+            f"Б {macros.protein:.1f} / Ж {macros.fat:.1f} / У {macros.carbs:.1f} "
+            f"(клетч {macros.fiber:.1f}, net {net:.1f})\n\n"
             f"Сегодня всего: {totals.calories:.0f} ккал | "
-            f"Б {totals.protein:.1f} / Ж {totals.fat:.1f} / У {totals.carbs:.1f} (net {totals.net_carbs:.1f})"
+            f"Б {totals.protein:.1f} / Ж {totals.fat:.1f} / У {totals.carbs:.1f} "
+            f"(клетч {totals.fiber:.1f}, net {total_net:.1f})"
         )
     else:
         await msg.reply_text(
