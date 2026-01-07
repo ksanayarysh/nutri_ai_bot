@@ -19,6 +19,8 @@ from src.portions import suggest_portion
 
 from src.payments import attach_payment_proof, get_pending_payment_request,notify_admins_about_payment
 
+ADMIN_USER_ID=452738438
+
 try:
     from nutribot.ai import estimate_from_text, estimate_from_photo  # type: ignore
 except Exception:  # pragma: no cover
