@@ -190,10 +190,10 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"📈 Итоги за 7 дней:\n\n"
         f"Дней с логами: {days}\n\n"
         f"Ккал: {calories:.0f}, среднее {calories / days:.1f}\n"
-        f"Белки: {protein:.1f} г, среднее {protein / days:.1f}\n"
-        f"Жиры: {fat:.1f} г, среднее {fat / days:.1f}\n"
-        f"Углеводы: {carbs:.1f} г, среднее {carbs / days:.1f}\n"
-        f"Чистые углеводы: {net_carbs:.1f} г, среднее {net_carbs / days:.1f}"
+        f"Белки: {protein:.1f}г, среднее {protein / days:.1f}г\n"
+        f"Жиры: {fat:.1f}г, среднее {fat / days:.1f}г\n"
+        f"Углеводы: {carbs:.1f}г, среднее {carbs / days:.1f}г\n"
+        f"Чистые углеводы: {net_carbs:.1f}г, среднее {net_carbs / days:.1f}"
     )
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
