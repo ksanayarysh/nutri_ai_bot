@@ -108,16 +108,23 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cur.execute(
             """
             SELECT
-              COALESCE(SUM(calories), 0),
-              COALESCE(SUM(protein), 0),
-              COALESCE(SUM(fat), 0),
-              COALESCE(SUM(carbs), 0),
-              COALESCE(SUM(fiber), 0)
+              COALESCE(meal, 'other')      AS meal,
+              COALESCE(item_name, '')      AS item_name,
+              COALESCE(qty, 1)             AS qty,
+              COALESCE(unit, 'serving')    AS unit,
+              COALESCE(calories, 0)        AS calories,
+              COALESCE(protein, 0)         AS protein,
+              COALESCE(fat, 0)             AS fat,
+              COALESCE(carbs, 0)           AS carbs,
+              COALESCE(fiber, 0)           AS fiber
             FROM entries
             WHERE user_id = %s AND entry_date = %s
+            ORDER BY meal_type, id
             """,
             (user.id, day),
         )
+        rows = cur.fetchall()
+
         calories, protein, fat, carbs, fiber = cur.fetchone()
 
     if not rows:
