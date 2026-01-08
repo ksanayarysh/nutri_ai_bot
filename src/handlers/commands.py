@@ -1138,3 +1138,83 @@ async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     mark_payment_request_rejected(rid, reason=reason)
     await msg.reply_text("❌ Отклонено.")
+
+from datetime import datetime, timedelta, timezone
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from src.db import db
+from src.config import ADMIN_IDS
+
+async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not _is_admin(user.id):
+        await msg.reply_text("Нет. Это админская команда 👑")
+        return
+
+    if not context.args or len(context.args) < 2:
+        await msg.reply_text(
+            "Формат:\n"
+            "/grant <user_id> <days|forever> [plan]\n\n"
+            "Примеры:\n"
+            "/grant 452738438 30 basic\n"
+            "/grant 452738438 forever premium"
+        )
+        return
+
+    try:
+        target_user_id = int(context.args[0])
+    except ValueError:
+        await msg.reply_text("user_id должен быть числом. Да, это важно.")
+        return
+
+    period = context.args[1].lower()
+    plan = context.args[2] if len(context.args) > 2 else None
+
+    now = datetime.now(timezone.utc)
+
+    if period == "forever":
+        expires_at = None
+    else:
+        try:
+            days = int(period)
+            if days <= 0:
+                await msg.reply_text("days должен быть > 0 (или используй forever).")
+                return
+            expires_at = now + timedelta(days=days)
+        except ValueError:
+            await msg.reply_text("Второй аргумент: число дней или 'forever'.")
+            return
+
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO subscriptions (user_id, status, plan, expires_at, created_at, updated_at)
+            VALUES (%s, 'active', %s, %s, %s, %s)
+            ON CONFLICT (user_id) DO UPDATE SET
+              status = 'active',
+              plan = COALESCE(EXCLUDED.plan, subscriptions.plan),
+              expires_at = EXCLUDED.expires_at,
+              updated_at = EXCLUDED.updated_at
+            """,
+            (target_user_id, plan, expires_at, now, now),
+        )
+        conn.commit()
+
+    human_expires = "навсегда" if expires_at is None else expires_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    await msg.reply_text(f"✅ Доступ выдан user_id={target_user_id}, план={plan or '—'}, до: {human_expires}")
+
+    # опционально: уведомить пользователя
+    try:
+        await context.bot.send_message(
+            chat_id=target_user_id,
+            text=f"✅ Подписка активирована ({plan or 'подписка'}). Срок: {human_expires}."
+        )
+    except Exception:
+        # если пользователь не писал боту или блокнул, просто молчим
+        pass
