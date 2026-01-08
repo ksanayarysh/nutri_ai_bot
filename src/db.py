@@ -147,3 +147,16 @@ def get_targets(uid: int) -> dict | None:
             "mode": mode,
             "updated_at": updated_at,
         }
+
+def mark_payment_request_proof_received(rid: int):
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE payment_requests
+            SET status = 'proof_received',
+                updated_at = NOW()
+            WHERE id = %s
+            """,
+            (rid,),
+        )

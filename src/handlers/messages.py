@@ -12,7 +12,7 @@ from typing import Optional, Tuple
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.db import db, now_iso, today_str
+from src.db import db, now_iso, today_str, mark_payment_request_proof_received
 from src.aliases import apply_aliases_to_text
 from src.profile import build_profile_hint
 from src.portions import suggest_portion
@@ -292,6 +292,7 @@ async def _handle_payment_proof_photo(
 
     file_id = msg.photo[-1].file_id
     attach_payment_proof(rid, proof_file_id=file_id)
+    mark_payment_request_proof_received(rid)
     await notify_admins_about_payment(context, rid, user.id)
 
     context.user_data.pop("pending_payment_request_id", None)

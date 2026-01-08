@@ -25,6 +25,35 @@ UNIT_LABELS = {
     "serving": "порц.",
 }
 
+def _format_unit(unit: str | None) -> str:
+    if not unit:
+        return ""
+    return UNIT_LABELS.get(unit, unit)
+
+async def _require_subscription(msg, user_id: int, text: str = "⏳ Эта функция доступна по подписке.\nИспользуй /pay") -> bool:
+    """Return True if access granted, otherwise replies and returns False."""
+    if is_subscribed(user_id):
+        return True
+    await msg.reply_text(text)
+    return False
+
+def _spark(values: list[float]) -> str:
+    """Tiny unicode sparkline."""
+    if not values:
+        return ""
+    blocks = "▁▂▃▄▅▆▇█"
+    lo = min(values)
+    hi = max(values)
+    if hi - lo < 1e-9:
+        return blocks[0] * len(values)
+    out = []
+    for v in values:
+        idx = int(round((v - lo) / (hi - lo) * (len(blocks) - 1)))
+        idx = max(0, min(len(blocks) - 1, idx))
+        out.append(blocks[idx])
+    return "".join(out)
+
+
 
 # -------------------------
 # /start
@@ -63,29 +92,70 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await msg.reply_text(
-        "📌 Команды NutriHelper:\n\n"
-        "📝 Логи питания\n"
-        "• /today — список еды + итоги за сегодня\n"
-        "• /week — итоги за неделю\n"
-        "• /del <n> — удалить запись #n из сегодняшнего списка (см. /today)\n"
-        "• /edit <n> <новый текст> — заменить запись #n (пример: /edit 2 огурец 200 г)\n\n"
-        "🧠 AI-анализ (подписка)\n"
-        "• /analyze_today — умный анализ дня + советы\n"
-        "• /analyze_week — анализ недели + фокус на улучшения\n\n"
-        "🎯 Цели (targets)\n"
-        "• /set_targets <kcal> <protein> <fat> <carbs> <net_carbs> [mode]\n"
-        "  пример: /set_targets 1400 90 70 30 20 keto\n"
-        "• /goals — показать текущие цели\n\n"
-        "👤 Профиль\n"
-        "• /profile — показать/обновить профиль (если у тебя так сделано)\n\n"
-        "💳 Подписка и связь\n"
-        "• /pay — оплата/подписка\n"
-        "• /myid — твой Telegram ID (для идентификации платежа)\n"
-        "• /contact — написать администратору через бота\n"
-        "• /cancel — отменить режим /contact\n\n"
-        "ℹ️ Другое\n"
-        "• /start — старт\n"
-        "• /help — эта справка"
+        """📌 Команды NutriHelper
+
+"
+        "📝 Дневник
+"
+        "• /today 🔒 — что съела сегодня + итоги
+"
+        "• /week 🔒 — итоги за 7 дней
+"
+        "• /del <n> — удалить запись #n из списка /today
+"
+        "• /edit <n> <новый текст> — исправить запись #n (пример: /edit 2 огурец 200 г)
+
+"
+        "🧠 AI (подписка)
+"
+        "• /analyze_today 🔒 — анализ дня + персональные советы
+"
+        "• /analyze_week 🔒 — анализ недели + фокус
+
+"
+        "🎯 Цели
+"
+        "• /set_targets kcal protein fat carbs net_carbs [mode]
+"
+        "  пример: /set_targets 1100 101 55 50 50 lowcarb
+"
+        "• /goals — показать текущие цели
+
+"
+        "📈 Прогресс
+"
+        "• /progress 🔒 — 7 дней: динамика + дни в цели
+"
+        "• /streak — серия дней с логами
+
+"
+        "👤 Профиль
+"
+        "• /profile — профиль (для более точного AI)
+
+"
+        "💳 Подписка
+"
+        "• /pay — оплата/подписка
+"
+        "• /myid — твой ID (чтобы сопоставить платёж)
+
+"
+        "✉️ Связь
+"
+        "• /contact — написать мне через бота
+"
+        "• /cancel — выйти из режима контакта
+
+"
+        "ℹ️
+"
+        "• /start — старт
+"
+        "• /help — эта справка
+
+"
+        "🔒 — доступно только по подписке"""
     )
 
 
@@ -98,11 +168,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
-    if not is_subscribed(user.id):
-        await update.message.reply_text(
-            "⏳ Эта функция доступна по подписке.\n"
-            "Используй /pay"
-        )
+    if not await _require_subscription(update.message, user.id):
         return
 
     day = today_str()
@@ -156,7 +222,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     i = 1
     for meal, name, qty, unit, cal, p, f, c, fi in rows:
         meals.setdefault(meal or "закуска", []).append(
-            f"•{i} {name} — {qty:g} {UNIT_LABELS[unit]} "
+            f"•{i} {name} — {qty:g} {_format_unit(unit)} "
             f"({cal:.0f} ккал, Б {p:.1f}, Ж {f:.1f}, У {c:.1f})"
         )
         i += 1
@@ -189,11 +255,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
-    if not is_subscribed(user.id):
-        await update.message.reply_text(
-            "⏳ Эта функция доступна по подписке.\n"
-            "Используй /pay"
-        )
+    if not await _require_subscription(update.message, user.id):
         return
 
     with db() as conn:
@@ -224,6 +286,155 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Углеводы: {carbs:.1f}г, среднее {carbs / days:.1f}г\n"
         f"Чистые углеводы: {net_carbs:.1f}г, среднее {net_carbs / days:.1f}"
     )
+
+# -------------------------
+# /progress (7-day trend)
+# -------------------------
+
+async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not await _require_subscription(msg, user.id):
+        return
+
+    days = 7
+    targets = get_targets(user.id)
+
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+              entry_date::date AS d,
+              COALESCE(SUM(calories), 0) AS calories,
+              COALESCE(SUM(protein), 0)  AS protein,
+              COALESCE(SUM(fat), 0)      AS fat,
+              COALESCE(SUM(carbs), 0)    AS carbs,
+              COALESCE(SUM(fiber), 0)    AS fiber
+            FROM entries
+            WHERE user_id = %s
+              AND entry_date::date >= (CURRENT_DATE - (%s * INTERVAL '1 day'))
+              AND item_name IS NOT NULL AND item_name <> ''
+            GROUP BY entry_date::date
+            ORDER BY d
+            """,
+            (user.id, days - 1),
+        )
+        rows = cur.fetchall()
+
+    if not rows:
+        await msg.reply_text("📭 За последние 7 дней нет записей.")
+        return
+
+    # fixed 7-day window, fill gaps with zeros
+    by_day = {r[0]: r[1:] for r in rows}
+    start = datetime.now(TZ).date() - timedelta(days=days - 1)
+
+    series = []
+    for i in range(days):
+        d = start + timedelta(days=i)
+        calories, protein, fat, carbs, fiber = by_day.get(d, (0, 0, 0, 0, 0))
+        calories = float(calories or 0)
+        protein = float(protein or 0)
+        fat = float(fat or 0)
+        carbs = float(carbs or 0)
+        fiber = float(fiber or 0)
+        net = max(carbs - fiber, 0.0)
+        series.append((d, calories, protein, fat, carbs, fiber, net))
+
+    cal_vals = [x[1] for x in series]
+    net_vals = [x[6] for x in series]
+
+    avg_cal = sum(cal_vals) / days
+    avg_p = sum(x[2] for x in series) / days
+    avg_net = sum(net_vals) / days
+
+    worst = max(series, key=lambda x: x[1])
+    best = min(series, key=lambda x: x[1])
+
+    lines = [f"📈 Прогресс за {days} дней:"]
+    lines.append(f"Ккал: {_spark(cal_vals)}  (ср. {avg_cal:.0f})")
+    lines.append(f"Чистые углеводы: {_spark(net_vals)}  (ср. {avg_net:.0f} г)")
+
+    if targets:
+        t_cal = float(targets.get("calories") or 0)
+        t_net = float(targets.get("net_carbs") or 0)
+
+        days_ok_cal = sum(1 for x in series if t_cal > 0 and x[1] <= t_cal) if t_cal > 0 else 0
+        days_ok_net = sum(1 for x in series if t_net > 0 and x[6] <= t_net) if t_net > 0 else 0
+
+        mode = targets.get("mode")
+        lines.append("")
+        lines.append("🎯 Дни в цели" + (f" ({mode})" if mode else "") + ":")
+        if t_cal > 0:
+            lines.append(f"• по калориям: {days_ok_cal}/{days}")
+        if t_net > 0:
+            lines.append(f"• по чистым углеводам: {days_ok_net}/{days}")
+
+        focus = []
+        t_p = float(targets.get("protein") or 0)
+        if t_p > 0 and avg_p < t_p:
+            focus.append("поднять белок")
+        if t_net > 0 and avg_net > t_net:
+            focus.append("снизить чистые углеводы")
+        if t_cal > 0 and avg_cal > t_cal:
+            focus.append("урезать калории")
+        if focus:
+            lines.append(f"🧭 Фокус: {', '.join(focus)}")
+
+    lines.append("")
+    lines.append(f"🔥 Самый калорийный день: {worst[0].isoformat()} — {worst[1]:.0f} ккал")
+    lines.append(f"🧊 Самый лёгкий день: {best[0].isoformat()} — {best[1]:.0f} ккал")
+
+    await msg.reply_text("\n".join(lines))
+
+# -------------------------
+# /streak (logging streak)
+# -------------------------
+
+async def cmd_streak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT DISTINCT entry_date::date AS d
+            FROM entries
+            WHERE user_id = %s
+              AND item_name IS NOT NULL AND item_name <> ''
+            ORDER BY d DESC
+            LIMIT 90
+            """,
+            (user.id,),
+        )
+        days = [r[0] for r in cur.fetchall()]
+
+    if not days:
+        await msg.reply_text("Пока нет ни одного дня с логами. Начни с любого блюда 🙂")
+        return
+
+    s = set(days)
+    today = datetime.now(TZ).date()
+
+    streak = 0
+    d = today
+    while d in s:
+        streak += 1
+        d = d - timedelta(days=1)
+
+    if streak == 0:
+        await msg.reply_text("Сегодня ещё нет логов. Хочешь серию? Запиши хоть одно блюдо.")
+        return
+
+    await msg.reply_text(f"🔥 Серия дней с логами: {streak}")
+
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -353,8 +564,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not user or not update.message:
         return
 
-    if not is_subscribed(user.id):
-        await update.message.reply_text("⏳ Анализ доступен по подписке. Используй /pay")
+    if not await _require_subscription(update.message, user.id, text='⏳ Анализ доступен по подписке.\nИспользуй /pay'):
         return
 
     days = 7
@@ -610,7 +820,7 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         conn.commit()
 
-    text = f"✅ Обновила запись #{idx}: {it.name} — {it.qty:g} {UNIT_LABELS[it.unit]} ({(it.calories or 0):.0f} ккал)"
+    text = f"✅ Обновила запись #{idx}: {it.name} — {it.qty:g} {_format_unit(it.unit)} ({(it.calories or 0):.0f} ккал)"
     if warn_multi:
         text += "\n⚠️ AI распознал несколько продуктов, я обновила только первый."
     await msg.reply_text(text)
@@ -622,8 +832,7 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not user or not msg:
         return
 
-    if not is_subscribed(user.id):
-        await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
+    if not await _require_subscription(update.message, user.id, text='⏳ Анализ доступен по подписке.\nИспользуй /pay'):
         return
 
     day = today_str()
