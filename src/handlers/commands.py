@@ -631,7 +631,6 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     with db() as conn:
         cur = conn.cursor()
 
-        # берём нормальные строки (без legacy-мусора)
         cur.execute(
             """
             SELECT
@@ -675,7 +674,12 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text("📭 За сегодня пока нет записей для анализа.")
         return
 
-    net_carbs = max(float(carbs) - float(fiber), 0.0)
+    calories = float(calories or 0)
+    protein = float(protein or 0)
+    fat = float(fat or 0)
+    carbs = float(carbs or 0)
+    fiber = float(fiber or 0)
+    net_carbs = max(carbs - fiber, 0.0)
 
     items_for_ai = []
     for meal, name, qty, unit, cal, p, f, c, fi in rows:
@@ -692,13 +696,25 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         })
 
     totals_for_ai = {
-        "calories": float(calories or 0),
-        "protein": float(protein or 0),
-        "fat": float(fat or 0),
-        "carbs": float(carbs or 0),
-        "fiber": float(fiber or 0),
+        "calories": calories,
+        "protein": protein,
+        "fat": fat,
+        "carbs": carbs,
+        "fiber": fiber,
         "net_carbs": float(net_carbs),
     }
+
+    # ✅ ДОБАВЛЯЕМ TARGETS ДЛЯ ПЕРСОНАЛЬНОГО АНАЛИЗА
+    targets = get_targets(user.id)  # dict | None
+    if targets:
+        totals_for_ai["targets"] = {
+            "calories": targets.get("calories"),
+            "protein": targets.get("protein"),
+            "fat": targets.get("fat"),
+            "carbs": targets.get("carbs"),
+            "net_carbs": targets.get("net_carbs"),
+            "mode": targets.get("mode"),
+        }
 
     try:
         profile_hint = build_profile_hint({"user_id": user.id})
@@ -712,7 +728,6 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await msg.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
         return
 
-    # красивый вывод
     lines = ["🧠 Анализ дня (AI):", f"• {analysis['headline']}"]
 
     good = analysis.get("good") or []
@@ -736,30 +751,41 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         lines.append("\n⚠️ Предупреждения:")
         lines.extend([f"• {x}" for x in warnings])
 
+    # ✅ БЛОК "ПРОГРЕСС VS ЦЕЛЬ"
+    if targets:
+        def _pct(a: float, b: float) -> str:
+            if not b or b <= 0:
+                return "-"
+            return f"{(a / b) * 100:.0f}%"
+
+        t_cal = float(targets.get("calories") or 0)
+        t_p   = float(targets.get("protein") or 0)
+        t_f   = float(targets.get("fat") or 0)
+        t_c   = float(targets.get("carbs") or 0)
+        t_nc  = float(targets.get("net_carbs") or 0)
+        mode = targets.get("mode")
+
+        lines.append("\n🎯 Прогресс vs цель" + (f" ({mode})" if mode else "") + ":")
+
+        lines.append(f"Ккал: {calories:.0f}/{t_cal:.0f} ({_pct(calories, t_cal)})" if t_cal else f"Ккал: {calories:.0f}")
+        lines.append(f"Белки: {protein:.0f}/{t_p:.0f} г ({_pct(protein, t_p)})" if t_p else f"Белки: {protein:.0f} г")
+        lines.append(f"Жиры: {fat:.0f}/{t_f:.0f} г ({_pct(fat, t_f)})" if t_f else f"Жиры: {fat:.0f} г")
+        lines.append(f"Углеводы: {carbs:.0f}/{t_c:.0f} г ({_pct(carbs, t_c)})" if t_c else f"Углеводы: {carbs:.0f} г")
+        lines.append(f"Чистые: {net_carbs:.0f}/{t_nc:.0f} г ({_pct(net_carbs, t_nc)})" if t_nc else f"Чистые: {net_carbs:.0f} г")
+    else:
+        lines.append("\n🎯 Чтобы советы были персональнее, задай цели: /set_targets ... (или посмотри /goals)")
+
     lines.append(
         "\n📊 Итоги:\n"
-        f"Ккал: {float(calories):.0f}\n"
-        f"Белки: {float(protein):.1f} г\n"
-        f"Жиры: {float(fat):.1f} г\n"
-        f"Углеводы: {float(carbs):.1f} г\n"
-        f"Клетчатка: {float(fiber):.1f} г\n"
+        f"Ккал: {calories:.0f}\n"
+        f"Белки: {protein:.1f} г\n"
+        f"Жиры: {fat:.1f} г\n"
+        f"Углеводы: {carbs:.1f} г\n"
+        f"Клетчатка: {fiber:.1f} г\n"
         f"Чистые углеводы: {net_carbs:.1f} г"
     )
 
-
     await msg.reply_text("\n".join(lines))
-
-async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not user or not update.message:
-        return
-
-    await update.message.reply_text(
-        f"🆔 Твой ID:\n\n"
-        f"`{user.id}`\n\n"
-        f"Используй этот ID при оплате или напиши его администратору.",
-        parse_mode="Markdown"
-    )
 
 
 async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
