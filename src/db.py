@@ -127,7 +127,7 @@ def get_targets(uid: int) -> dict | None:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT calories, protein, fat, carbs, net_carbs, mode, updated_at
+            SELECT kcal, protein, fat, carbs, net_carbs, mode, updated_at
             FROM targets
             WHERE user_id = %s
             """,
