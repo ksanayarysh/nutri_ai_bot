@@ -18,7 +18,7 @@ from src.logging_setup import setup_logging
 from src.payments import on_paidproof_callback, cmd_pay
 from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets, \
     cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel, cmd_goals, cmd_progress, cmd_streak, \
-    cmd_notify, cmd_notify_time, cmd_notify_weekly
+    cmd_notify, cmd_notify_time, cmd_notify_weekly, cmd_approve, cmd_reject
 from src.handlers.messages import on_text, on_photo, on_new_members
 
 try:
@@ -68,6 +68,9 @@ def build_app():
     app.add_handler(CommandHandler("notify_weekly", cmd_notify_weekly))
     app.add_handler(CommandHandler("progress", cmd_progress))
     app.add_handler(CommandHandler("streak", cmd_streak))
+
+    app.add_handler(CommandHandler("approve", cmd_approve))
+    app.add_handler(CommandHandler("reject", cmd_reject))
 
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 

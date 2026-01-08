@@ -161,3 +161,27 @@ async def notify_admins_about_payment(
             await context.bot.send_message(admin_id, text)
         except Exception:
             pass
+
+def get_payment_request_by_id(rid: int):
+    with db() as conn:
+        cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute("SELECT * FROM payment_requests WHERE id=%s", (rid,))
+        return cur.fetchone()
+
+def mark_payment_request_approved(rid: int):
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE payment_requests SET status='approved', updated_at=NOW() WHERE id=%s",
+            (rid,),
+        )
+        conn.commit()
+
+def mark_payment_request_rejected(rid: int, reason: str | None = None):
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE payment_requests SET status='rejected', admin_note=%s, updated_at=NOW() WHERE id=%s",
+            (reason, rid),
+        )
+        conn.commit()

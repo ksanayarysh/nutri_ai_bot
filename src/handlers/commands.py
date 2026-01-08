@@ -9,7 +9,7 @@ from src.bot import meal_to_ru
 from src.db import ensure_user, get_targets
 from src.profile import build_profile_hint
 from src.subscriptions import ensure_trial_subscription
-from src.config import PRICE_TEXT
+from src.config import PRICE_TEXT, ADMIN_IDS
 
 from datetime import datetime, timedelta
 from src.config import TZ
@@ -1068,3 +1068,75 @@ async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     lines.append(f"\n✅ Дней близко к цели: {days_in_goal}/{len(rows)}")
     await msg.reply_text("\n".join(lines))
+
+def _is_admin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
+
+from datetime import datetime, timedelta, timezone
+from src.subscriptions import set_subscription
+from src.payments import (
+    get_payment_request_by_id,
+    mark_payment_request_approved,
+    mark_payment_request_rejected,
+)
+
+async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+    if not _is_admin(user.id):
+        return
+
+    if not context.args or len(context.args) < 2:
+        await msg.reply_text("Формат: /approve <request_id> <days|forever> [plan]")
+        return
+
+    rid = int(context.args[0])
+    days_raw = context.args[1].lower()
+    plan = context.args[2] if len(context.args) > 2 else None
+
+    req = get_payment_request_by_id(rid)
+    if not req:
+        await msg.reply_text("Не нашла такую заявку.")
+        return
+
+    target_user_id = int(req["user_id"])
+
+    now = datetime.now(timezone.utc)
+    if days_raw == "forever":
+        expires_at = None
+    else:
+        days = int(days_raw)
+        expires_at = now + timedelta(days=days)
+
+    # 1) подписка
+    set_subscription(target_user_id, status="active", plan=plan, expires_at=expires_at)
+
+    # 2) заявка
+    mark_payment_request_approved(rid)
+
+    await msg.reply_text(f"✅ Подписка активирована для user_id={target_user_id}, expires_at={expires_at or 'forever'}")
+
+async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+    if not _is_admin(user.id):
+        return
+
+    if not context.args:
+        await msg.reply_text("Формат: /reject <request_id> [reason]")
+        return
+
+    rid = int(context.args[0])
+    reason = " ".join(context.args[1:]) if len(context.args) > 1 else None
+
+    req = get_payment_request_by_id(rid)
+    if not req:
+        await msg.reply_text("Не нашла такую заявку.")
+        return
+
+    mark_payment_request_rejected(rid, reason=reason)
+    await msg.reply_text("❌ Отклонено.")
