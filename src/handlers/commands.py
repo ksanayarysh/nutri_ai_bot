@@ -831,31 +831,32 @@ async def cmd_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not msg:
         return
 
-    t = get_targets(user.id)
-    if not t:
+    targets = get_targets(user.id)
+
+    if not targets:
         await msg.reply_text(
-            "🎯 Цели не настроены.\n\n"
+            "🎯 Цели не заданы.\n\n"
             "Задай их командой:\n"
-            "`/set_targets 1400 90 70 30 20 keto`\n\n"
-            "Формат:\n"
-            "`/set_targets kcal protein fat carbs net_carbs [mode]`",
+            "`/set_targets kcal protein fat carbs net_carbs [mode]`\n\n"
+            "Пример:\n"
+            "`/set_targets 1400 90 70 30 20 keto`",
             parse_mode="Markdown",
         )
         return
 
-    mode = f" ({t['mode']})" if t.get("mode") else ""
-    await msg.reply_text(
-        "🎯 Твои цели" + mode + ":\n\n"
-        f"Ккал: {t['calories']:.0f}\n"
-        f"Белки: {t['protein']:.0f} г\n"
-        f"Жиры: {t['fat']:.0f} г\n"
-        f"Углеводы: {t['carbs']:.0f} г\n"
-        f"Чистые углеводы: {t['net_carbs']:.0f} г\n\n"
-        "Изменить:\n"
-        "`/set_targets kcal protein fat carbs net_carbs [mode]`",
-        parse_mode="Markdown",
-    )
+    lines = [
+        "🎯 Твои цели:",
+        f"Ккал: {targets.get('calories')}",
+        f"Белки: {targets.get('protein')} г",
+        f"Жиры: {targets.get('fat')} г",
+        f"Углеводы: {targets.get('carbs')} г",
+        f"Чистые углеводы: {targets.get('net_carbs')} г",
+    ]
 
+    if targets.get("mode"):
+        lines.append(f"Режим: {targets['mode']}")
+
+    await msg.reply_text("\n".join(lines))
 
 # -------------------------
 # /notify (daily auto-report)
