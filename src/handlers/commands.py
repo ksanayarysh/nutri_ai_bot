@@ -8,7 +8,6 @@ from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.bot import meal_to_ru
 from src.db import ensure_user, get_targets
 from src.profile import build_profile_hint
-from src.subscriptions import ensure_trial_subscription
 from src.config import PRICE_TEXT, ADMIN_IDS
 
 from datetime import datetime, timedelta
@@ -43,7 +42,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     ensure_user(user.id, user.username, user.first_name)
-    ensure_trial_subscription(user.id)
 
     await update.message.reply_text(
         "Привет! 👋\n\n"
