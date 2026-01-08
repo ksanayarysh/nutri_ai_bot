@@ -59,7 +59,11 @@ def build_app():
     app.add_handler(CommandHandler("cancel", cmd_cancel))
 
     # этот handler должен идти ДО обычного текстового
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, contact_message_handler))
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, contact_message_handler, block=False)
+    )
+
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     # 3) messages
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
