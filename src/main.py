@@ -16,7 +16,7 @@ from src.db import init_db
 from src.logging_setup import setup_logging
 from src.payments import on_paidproof_callback, cmd_pay
 from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets, \
-    cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel
+    cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel, cmd_goals
 from src.handlers.messages import on_text, on_photo, on_new_members, contact_message_handler
 
 try:
@@ -49,6 +49,7 @@ def build_app():
     app.add_handler(CommandHandler("set_targets", cmd_set_targets))
     app.add_handler(CommandHandler("analyze_week", cmd_analyze))
     app.add_handler(CommandHandler("analyze_today", cmd_analyze_today))
+    app.add_handler(CommandHandler("goals", cmd_goals))
 
     app.add_handler(CommandHandler("del", cmd_del))
     app.add_handler(CommandHandler("edit", cmd_edit))

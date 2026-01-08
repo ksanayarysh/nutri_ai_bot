@@ -58,19 +58,34 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # -------------------------
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not update.message:
+    msg = update.message
+    if not msg:
         return
 
-    await update.message.reply_text(
-        "ℹ️ Как пользоваться ботом:\n\n"
-        "• Пиши, что съела: `обед: курица и салат`\n"
-        "• Или присылай фото еды 📸\n\n"
-        "Я записываю всё в дневник и считаю КБЖУ.\n\n"
-        "Команды:\n"
-        "/today — итоги дня\n"
-        "/week — итоги недели\n"
-        f"/pay — подписка ({PRICE_TEXT})\n",
-        parse_mode="Markdown",
+    await msg.reply_text(
+        "📌 Команды NutriHelper:\n\n"
+        "📝 Логи питания\n"
+        "• /today — список еды + итоги за сегодня\n"
+        "• /week — итоги за неделю\n"
+        "• /del <n> — удалить запись #n из сегодняшнего списка (см. /today)\n"
+        "• /edit <n> <новый текст> — заменить запись #n (пример: /edit 2 огурец 200 г)\n\n"
+        "🧠 AI-анализ (подписка)\n"
+        "• /analyze_today — умный анализ дня + советы\n"
+        "• /analyze_week — анализ недели + фокус на улучшения\n\n"
+        "🎯 Цели (targets)\n"
+        "• /set_targets <kcal> <protein> <fat> <carbs> <net_carbs> [mode]\n"
+        "  пример: /set_targets 1400 90 70 30 20 keto\n"
+        "• /goals — показать текущие цели\n\n"
+        "👤 Профиль\n"
+        "• /profile — показать/обновить профиль (если у тебя так сделано)\n\n"
+        "💳 Подписка и связь\n"
+        "• /pay — оплата/подписка\n"
+        "• /myid — твой Telegram ID (для идентификации платежа)\n"
+        "• /contact — написать администратору через бота\n"
+        "• /cancel — отменить режим /contact\n\n"
+        "ℹ️ Другое\n"
+        "• /start — старт\n"
+        "• /help — эта справка"
     )
 
 
