@@ -403,6 +403,23 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # -------------------------
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # в самом начале on_text
+    if context.user_data.get("contact_mode"):
+        text = update.effective_message.text or ""
+        await context.bot.send_message(
+            chat_id=ADMIN_USER_ID,
+            text=(
+                "📩 Сообщение от пользователя\n\n"
+                f"ID: {update.effective_user.id}\n"
+                f"Username: @{update.effective_user.username}\n"
+                f"Имя: {update.effective_user.first_name}\n\n"
+                f"Текст:\n{text}"
+            )
+        )
+        context.user_data["contact_mode"] = False
+        await update.effective_message.reply_text("✅ Сообщение отправлено администратору.")
+        return
+
     msg = update.message
     if not msg or not msg.text:
         return
