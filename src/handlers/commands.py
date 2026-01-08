@@ -787,6 +787,18 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     await msg.reply_text("\n".join(lines))
 
+async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user or not update.message:
+        return
+
+    await update.message.reply_text(
+        f"🆔 Твой ID:\n\n"
+        f"`{user.id}`\n\n"
+        f"Используй этот ID при оплате или напиши его администратору.",
+        parse_mode="Markdown"
+    )
+
 
 async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message:

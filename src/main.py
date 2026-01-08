@@ -17,7 +17,7 @@ from src.logging_setup import setup_logging
 from src.payments import on_paidproof_callback, cmd_pay
 from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets, \
     cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel, cmd_goals
-from src.handlers.messages import on_text, on_photo, on_new_members, contact_message_handler
+from src.handlers.messages import on_text, on_photo, on_new_members
 
 try:
     from src.handlers.errors import global_error_handler
