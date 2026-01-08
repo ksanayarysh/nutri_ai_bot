@@ -13,10 +13,12 @@ from telegram.ext import (
 
 from src.config import TELEGRAM_TOKEN
 from src.db import init_db
+from src.jobs.jobs import setup_jobs
 from src.logging_setup import setup_logging
 from src.payments import on_paidproof_callback, cmd_pay
 from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets, \
-    cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel, cmd_goals, cmd_progress, cmd_streak
+    cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel, cmd_goals, cmd_progress, cmd_streak, \
+    cmd_notify, cmd_notify_time, cmd_notify_weekly
 from src.handlers.messages import on_text, on_photo, on_new_members
 
 try:
@@ -61,6 +63,12 @@ def build_app():
     app.add_handler(CommandHandler("progress", cmd_progress))
     app.add_handler(CommandHandler("streak", cmd_streak))
 
+    app.add_handler(CommandHandler("notify", cmd_notify))
+    app.add_handler(CommandHandler("notify_time", cmd_notify_time))
+    app.add_handler(CommandHandler("notify_weekly", cmd_notify_weekly))
+    app.add_handler(CommandHandler("progress", cmd_progress))
+    app.add_handler(CommandHandler("streak", cmd_streak))
+
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
 
     # 3) messages
@@ -80,6 +88,7 @@ def main() -> None:
     setup_logging()
     app = build_app()
     logger.info("Bot started")
+    setup_jobs(app)
     app.run_polling(allowed_updates=None)
 
 
