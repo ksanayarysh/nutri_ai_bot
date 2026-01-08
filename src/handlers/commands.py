@@ -1218,3 +1218,61 @@ async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         # если пользователь не писал боту или блокнул, просто молчим
         pass
+
+from datetime import datetime, timezone
+
+async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not _is_admin(user.id):
+        await msg.reply_text("Нет. Это админская команда 👑")
+        return
+
+    if not context.args:
+        await msg.reply_text("Формат: /sub <user_id>\nПример: /sub 452738438")
+        return
+
+    try:
+        target_user_id = int(context.args[0])
+    except ValueError:
+        await msg.reply_text("user_id должен быть числом.")
+        return
+
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT status, plan, expires_at, created_at, updated_at
+            FROM subscriptions
+            WHERE user_id = %s
+            """,
+            (target_user_id,),
+        )
+        row = cur.fetchone()
+
+    if not row:
+        await msg.reply_text(f"Подписка: нет записи для user_id={target_user_id}")
+        return
+
+    status, plan, expires_at, created_at, updated_at = row
+    now = datetime.now(timezone.utc)
+
+    if status == "active" and (expires_at is None or expires_at > now):
+        state = "✅ ACTIVE"
+    elif status == "active":
+        state = "⏳ EXPIRED"
+    else:
+        state = f"❌ {status.upper()}"
+
+    exp_txt = "навсегда" if expires_at is None else str(expires_at)
+    await msg.reply_text(
+        f"👤 user_id={target_user_id}\n"
+        f"Статус: {state}\n"
+        f"План: {plan or '—'}\n"
+        f"Действует до: {exp_txt}\n"
+        f"Создано: {created_at}\n"
+        f"Обновлено: {updated_at}"
+    )
