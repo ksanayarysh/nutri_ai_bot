@@ -121,3 +121,29 @@ def ensure_user(user_id: int, username: str | None, first_name: str | None) -> N
             """,
             (user_id, now_iso(), username, first_name),
         )
+
+def get_targets(uid: int) -> dict | None:
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT calories, protein, fat, carbs, net_carbs, mode, updated_at
+            FROM targets
+            WHERE user_id = %s
+            """,
+            (uid,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        calories, protein, fat, carbs, net_carbs, mode, updated_at = row
+        return {
+            "calories": float(calories) if calories is not None else None,
+            "protein": float(protein) if protein is not None else None,
+            "fat": float(fat) if fat is not None else None,
+            "carbs": float(carbs) if carbs is not None else None,
+            "net_carbs": float(net_carbs) if net_carbs is not None else None,
+            "mode": mode,
+            "updated_at": updated_at,
+        }

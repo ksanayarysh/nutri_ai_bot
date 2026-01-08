@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.bot import meal_to_ru
-from src.db import ensure_user
+from src.db import ensure_user, get_targets
 from src.profile import build_profile_hint
 from src.subscriptions import ensure_trial_subscription
 from src.config import PRICE_TEXT
@@ -278,13 +278,14 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 async def cmd_set_targets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    if not user or not update.message:
+    msg = update.message
+    if not user or not msg:
         return
 
     if not context.args or len(context.args) < 5:
-        await update.message.reply_text(
+        await msg.reply_text(
             "Формат:\n"
-            "`/set_targets kcal protein fat carbs net_carbs [mode]`\n"
+            "`/set_targets калории белок жир углеводы чистые углеводы [режим]`\n"
             "Пример:\n"
             "`/set_targets 1400 90 70 30 20 keto`",
             parse_mode="Markdown",
@@ -299,7 +300,15 @@ async def cmd_set_targets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         net_carbs = float(context.args[4])
         mode = context.args[5] if len(context.args) > 5 else None
     except ValueError:
-        await update.message.reply_text("Числа в целях должны быть числами. Да, это звучит очевидно.")
+        await msg.reply_text("Числа в целях должны быть числами. Да, это звучит очевидно.")
+        return
+
+    # минимальная sanity-проверка
+    if kcal <= 0 or protein < 0 or fat < 0 or carbs < 0 or net_carbs < 0:
+        await msg.reply_text("Цели должны быть положительными (ккал > 0, остальные >= 0).")
+        return
+    if net_carbs > carbs:
+        await msg.reply_text("net_carbs не может быть больше carbs.")
         return
 
     with db() as conn:
@@ -319,8 +328,9 @@ async def cmd_set_targets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             """,
             (user.id, kcal, protein, fat, carbs, net_carbs, mode, datetime.now(TZ).isoformat(timespec="seconds")),
         )
+        conn.commit()
 
-    await update.message.reply_text("Цели сохранены ✅")
+    await msg.reply_text("Цели сохранены ✅\nПосмотреть: /goals")
 
 
 async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -752,3 +762,34 @@ async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     context.user_data.pop("contact_mode", None)
     if update.message:
         await update.message.reply_text("❌ Отменено.")
+
+async def cmd_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    t = get_targets(user.id)
+    if not t:
+        await msg.reply_text(
+            "🎯 Цели не настроены.\n\n"
+            "Задай их командой:\n"
+            "`/set_targets 1400 90 70 30 20 keto`\n\n"
+            "Формат:\n"
+            "`/set_targets kcal protein fat carbs net_carbs [mode]`",
+            parse_mode="Markdown",
+        )
+        return
+
+    mode = f" ({t['mode']})" if t.get("mode") else ""
+    await msg.reply_text(
+        "🎯 Твои цели" + mode + ":\n\n"
+        f"Ккал: {t['calories']:.0f}\n"
+        f"Белки: {t['protein']:.0f} г\n"
+        f"Жиры: {t['fat']:.0f} г\n"
+        f"Углеводы: {t['carbs']:.0f} г\n"
+        f"Чистые углеводы: {t['net_carbs']:.0f} г\n\n"
+        "Изменить:\n"
+        "`/set_targets kcal protein fat carbs net_carbs [mode]`",
+        parse_mode="Markdown",
+    )
