@@ -364,110 +364,67 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     day = today_str()
     photo = msg.photo[-1]
 
-    # meal_hint: пока простой (можно потом распарсить caption как ты делала с текстом)
-    meal_hint = "other"
+    # Если пользователь добавил подпись к фото, попробуем вытащить из неё meal (завтрак/обед/...) как в тексте.
     caption = (msg.caption or "").strip()
     if caption:
-        # если у тебя есть parse_meal_and_body — можно здесь использовать
-        # meal_hint, _ = parse_meal_and_body(caption)
-        meal_hint = "other"
+        meal_type, body = parse_meal_and_body(caption)
+    else:
+        meal_type, body = "other", "food photo"
 
     profile_hint = build_profile_hint({"user_id": user.id})
-
-    items = []
-    confidence = 0.0
-    meta: dict = {}
 
     try:
         items, confidence, meta = await _estimate_macros_from_telegram_photo(
             context.bot,
             photo.file_id,
-            meal_hint=meal_hint,
+            meal_hint=meal_type,
             profile_hint=profile_hint,
         )
-    except Exception as e:
-        # Фолбэк: просто сохраняем фото без КБЖУ
-        # (тут важно: не писать "AI не подключен", если он подключен, но упал)
-        await msg.reply_text(
-            "Фото записано ✅\n"
-            "Пока без КБЖУ (не смогла оценить по фото). "
-            "Добавь подпись текстом (что это и сколько) и я посчитаю точнее."
-        )
-        # тут можно ещё сохранить raw_photo в entries как отдельную запись без macros, если ты так делаешь
-        return
-
-    if not items:
-        await msg.reply_text(
-            "Фото записано ✅\n"
-            "Но по фото я не смогла уверенно распознать еду. "
-            "Добавь подпись текстом (что это и сколько) и я посчитаю."
-        )
-        return
-
-    # Суммируем итоги по items
-    total_cal = 0.0
-    total_p = 0.0
-    total_f = 0.0
-    total_c = 0.0
-    total_fiber = 0.0
-
-    # Если fiber где-то None — считаем как 0 в сумме, а в вывод добавим пометку
-    has_unknown_fiber = False
-
-    for it in items:
-        total_cal += float(it.calories or 0)
-        total_p += float(it.protein or 0)
-        total_f += float(it.fat or 0)
-        total_c += float(it.carbs or 0)
-        if it.fiber is None:
-            has_unknown_fiber = True
-        else:
-            total_fiber += float(it.fiber or 0)
-
-    net_carbs = max(total_c - total_fiber, 0.0)
-
-    # Сохраняем в БД: у тебя схема entries сейчас item-ориентированная (item_name/qty/unit/...)
-    # Вставляй по одному item через твою insert_entry(...) или как оно у тебя называется.
-    # Ниже пример: замени insert_entry на твою реальную функцию сохранения.
-    for it in items:
-        macros = Macros(
-            calories=float(it.calories or 0),
-            protein=float(it.protein or 0),
-            fat=float(it.fat or 0),
-            carbs=float(it.carbs or 0),
-            fiber=float(it.fiber) if it.fiber is not None else 0.0,
-        )
-        # ВАЖНО: unit оставляй как есть, но позже мы заменим "pcs" -> "шт" в выводе
+    except Exception:
+        # AI может упасть или не суметь оценить фото — в этом случае честный fallback.
         insert_entry(
             user_id=user.id,
             day=day,
-            meal_type=meal_hint,
-            text=caption or "food photo",
-            item_name=it.name,
-            qty=it.qty,
-            unit=it.unit,
-            macros=macros,
+            meal_type=meal_type,
+            text=body,
+            macros=None,
         )
-
-    # Красивый ответ
-    lines = ["Фото записано ✅", f"Уверенность: {confidence:.2f}", ""]
-    for i, it in enumerate(items, 1):
-        fiber_txt = "?" if it.fiber is None else f"{float(it.fiber):.1f}"
-        lines.append(
-            f"{i}) {it.name} — {float(it.qty):g} {it.unit} "
-            f"({float(it.calories):.0f} ккал, Б {float(it.protein):.1f}, Ж {float(it.fat):.1f}, У {float(it.carbs):.1f}, клетч {fiber_txt})"
+        await msg.reply_text(
+            """Фото записано ✅
+            "Пока без КБЖУ (не смогла оценить по фото). "
+            "Добавь подпись текстом (что это и сколько), и я посчитаю точнее."""
         )
+        return
 
-    lines.append("")
-    lines.append("📊 Итог по фото:")
-    lines.append(f"Ккал: {total_cal:.0f}")
-    lines.append(f"Белки: {total_p:.1f} г")
-    lines.append(f"Жиры: {total_f:.1f} г")
-    lines.append(f"Углеводы: {total_c:.1f} г")
-    lines.append(f"Клетчатка: {total_fiber:.1f} г" + (" (часть неизвестна)" if has_unknown_fiber else ""))
-    lines.append(f"Чистые углеводы: {net_carbs:.1f} г")
+    if not items:
+        insert_entry(
+            user_id=user.id,
+            day=day,
+            meal_type=meal_type,
+            text=body,
+            macros=None,
+        )
+        await msg.reply_text(
+            """Фото записано ✅
+            "Но по фото я не смогла уверенно распознать еду. "
+            "Добавь подпись текстом (что это и сколько), и я посчитаю."""
+        )
+        return
 
-    await msg.reply_text("\n".join(lines))
+    # Сохраняем items тем же путём, что и текстовые записи (это важно для /today, /week и аналитики).
+    meta = meta or {"assumptions": []}
+    meta.setdefault("assumptions", [])
+
+    await _save_items_and_reply(
+        update=update,
+        uid=user.id,
+        day=day,
+        meal=_normalize_meal(meal_type),
+        raw_text=body,
+        items=items,
+        confidence=confidence,
+        meta=meta,
+    )
 
 
 # -------------------------
