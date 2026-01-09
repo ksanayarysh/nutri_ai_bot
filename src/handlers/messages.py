@@ -1,7 +1,7 @@
 # nutribot/handlers/messages.py
 from __future__ import annotations
 
-from src.ai import ai_estimate
+from src.ai import ai_estimate, ai_estimate_photo
 from datetime import datetime, timezone
 from src.config import MEAL_ALIASES
 from src.food_structure.food import Macros
@@ -364,39 +364,110 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     day = today_str()
     photo = msg.photo[-1]
 
-    macros: Optional[Macros] = None
-    description = "food photo"
+    # meal_hint: пока простой (можно потом распарсить caption как ты делала с текстом)
+    meal_hint = "other"
+    caption = (msg.caption or "").strip()
+    if caption:
+        # если у тебя есть parse_meal_and_body — можно здесь использовать
+        # meal_hint, _ = parse_meal_and_body(caption)
+        meal_hint = "other"
 
-    if estimate_from_photo:
-        try:
-            est = await estimate_from_photo(context.bot, photo.file_id)  # expected dict-like
-            description = str(est.get("title") or est.get("description") or "food")
-            macros = Macros(
-                calories=float(est.get("calories", 0)),
-                protein=float(est.get("protein", 0)),
-                fat=float(est.get("fat", 0)),
-                carbs=float(est.get("carbs", 0)),
-                fiber=float(est.get("net_carbs", est.get("carbs", 0))),
-            )
-        except Exception:
-            macros = None
+    profile_hint = build_profile_hint({"user_id": user.id})
 
-    insert_entry(user.id, day, "other", f"[photo] {description}", macros)
+    items = []
+    confidence = 0.0
+    meta: dict = {}
 
-    totals = get_day_totals(user.id, day)
-    if macros:
+    try:
+        items, confidence, meta = await _estimate_macros_from_telegram_photo(
+            context.bot,
+            photo.file_id,
+            meal_hint=meal_hint,
+            profile_hint=profile_hint,
+        )
+    except Exception as e:
+        # Фолбэк: просто сохраняем фото без КБЖУ
+        # (тут важно: не писать "AI не подключен", если он подключен, но упал)
         await msg.reply_text(
             "Фото записано ✅\n"
-            f"Оценка: {macros.calories:.0f} ккал | "
-            f"Б {macros.protein:.1f} / Ж {macros.fat:.1f} / У {macros.carbs:.1f} (net {macros.net_carbs:.1f})\n\n"
-            f"Сегодня всего: {totals.calories:.0f} ккал | "
-            f"Б {totals.protein:.1f} / Ж {totals.fat:.1f} / У {totals.carbs:.1f} (net {totals.net_carbs:.1f})"
+            "Пока без КБЖУ (не смогла оценить по фото). "
+            "Добавь подпись текстом (что это и сколько) и я посчитаю точнее."
         )
-    else:
+        # тут можно ещё сохранить raw_photo в entries как отдельную запись без macros, если ты так делаешь
+        return
+
+    if not items:
         await msg.reply_text(
             "Фото записано ✅\n"
-            "Пока без КБЖУ (AI-модуль не подключён или не смог оценить)."
+            "Но по фото я не смогла уверенно распознать еду. "
+            "Добавь подпись текстом (что это и сколько) и я посчитаю."
         )
+        return
+
+    # Суммируем итоги по items
+    total_cal = 0.0
+    total_p = 0.0
+    total_f = 0.0
+    total_c = 0.0
+    total_fiber = 0.0
+
+    # Если fiber где-то None — считаем как 0 в сумме, а в вывод добавим пометку
+    has_unknown_fiber = False
+
+    for it in items:
+        total_cal += float(it.calories or 0)
+        total_p += float(it.protein or 0)
+        total_f += float(it.fat or 0)
+        total_c += float(it.carbs or 0)
+        if it.fiber is None:
+            has_unknown_fiber = True
+        else:
+            total_fiber += float(it.fiber or 0)
+
+    net_carbs = max(total_c - total_fiber, 0.0)
+
+    # Сохраняем в БД: у тебя схема entries сейчас item-ориентированная (item_name/qty/unit/...)
+    # Вставляй по одному item через твою insert_entry(...) или как оно у тебя называется.
+    # Ниже пример: замени insert_entry на твою реальную функцию сохранения.
+    for it in items:
+        macros = Macros(
+            calories=float(it.calories or 0),
+            protein=float(it.protein or 0),
+            fat=float(it.fat or 0),
+            carbs=float(it.carbs or 0),
+            fiber=float(it.fiber) if it.fiber is not None else 0.0,
+        )
+        # ВАЖНО: unit оставляй как есть, но позже мы заменим "pcs" -> "шт" в выводе
+        insert_entry(
+            user_id=user.id,
+            day=day,
+            meal_type=meal_hint,
+            text=caption or "food photo",
+            item_name=it.name,
+            qty=it.qty,
+            unit=it.unit,
+            macros=macros,
+        )
+
+    # Красивый ответ
+    lines = ["Фото записано ✅", f"Уверенность: {confidence:.2f}", ""]
+    for i, it in enumerate(items, 1):
+        fiber_txt = "?" if it.fiber is None else f"{float(it.fiber):.1f}"
+        lines.append(
+            f"{i}) {it.name} — {float(it.qty):g} {it.unit} "
+            f"({float(it.calories):.0f} ккал, Б {float(it.protein):.1f}, Ж {float(it.fat):.1f}, У {float(it.carbs):.1f}, клетч {fiber_txt})"
+        )
+
+    lines.append("")
+    lines.append("📊 Итог по фото:")
+    lines.append(f"Ккал: {total_cal:.0f}")
+    lines.append(f"Белки: {total_p:.1f} г")
+    lines.append(f"Жиры: {total_f:.1f} г")
+    lines.append(f"Углеводы: {total_c:.1f} г")
+    lines.append(f"Клетчатка: {total_fiber:.1f} г" + (" (часть неизвестна)" if has_unknown_fiber else ""))
+    lines.append(f"Чистые углеводы: {net_carbs:.1f} г")
+
+    await msg.reply_text("\n".join(lines))
 
 
 # -------------------------
@@ -727,3 +798,36 @@ async def contact_message_handler(update: Update, context: ContextTypes.DEFAULT_
     context.user_data["contact_mode"] = False
 
     await msg.reply_text("✅ Сообщение отправлено администратору.")
+
+async def _estimate_macros_from_telegram_photo(
+    bot,
+    file_id: str,
+    meal_hint: str,
+    profile_hint: dict,
+) -> tuple[list, float, dict]:
+    """
+    Скачивает фото из Telegram и вызывает ai_estimate_photo(image_bytes,...).
+    Возвращает: items, confidence, meta
+    """
+    tg_file = await bot.get_file(file_id)
+
+    # Скачиваем bytes в память
+    data = await tg_file.download_as_bytearray()
+    image_bytes = bytes(data)
+
+    # MIME: Telegram не даёт напрямую, но file_path обычно оканчивается на .jpg
+    path = (tg_file.file_path or "").lower()
+    if path.endswith(".png"):
+        image_mime = "image/png"
+    elif path.endswith(".webp"):
+        image_mime = "image/webp"
+    else:
+        image_mime = "image/jpeg"
+
+    items, confidence, meta = ai_estimate_photo(
+        image_bytes=image_bytes,
+        image_mime=image_mime,
+        meal_hint=meal_hint,
+        profile_hint=profile_hint,
+    )
+    return items, confidence, meta
