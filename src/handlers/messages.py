@@ -1,10 +1,7 @@
 # nutribot/handlers/messages.py
 from __future__ import annotations
 
-from src.ai import ai_estimate, ai_estimate_photo
 from datetime import datetime, timezone
-from src.config import MEAL_ALIASES
-from src.food_structure.food import Macros
 import json
 import re
 from typing import Optional, Tuple
@@ -12,20 +9,16 @@ from typing import Optional, Tuple
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.db import db, now_iso, today_str, mark_payment_request_proof_received
+from src.ai import ai_estimate, ai_estimate_photo
 from src.aliases import apply_aliases_to_text
-from src.profile import build_profile_hint
+from src.config import MEAL_ALIASES
+from src.db import db, now_iso, today_str
+from src.food_structure.food import Macros
 from src.portions import suggest_portion
+from src.profile import build_profile_hint
 
-from src.payments import attach_payment_proof, get_pending_payment_request,notify_admins_about_payment
-
-ADMIN_USER_ID=452738438
-
-try:
-    from nutribot.ai import estimate_from_text, estimate_from_photo  # type: ignore
-except Exception:  # pragma: no cover
-    estimate_from_text = None
-    estimate_from_photo = None
+# Admin chat for "contact me" forwarding
+ADMIN_USER_ID = 452738438
 
 
 def fmt(x: float | None) -> str:
@@ -47,6 +40,7 @@ def unit_to_ru(unit: str | None) -> str:
         "pcs": "шт",
         "tsp": "ч.л.",
         "tbsp": "ст.л.",
+        "serving": "порц.",
     }.get(unit, unit or "")
 
 
@@ -59,6 +53,7 @@ def meal_to_ru(meal: str) -> str:
         "other": "перекус",
     }.get(meal, meal)
 
+
 # -------------------------
 # Parsing helpers
 # -------------------------
@@ -67,21 +62,18 @@ MEAL_PREFIX_RE = re.compile(
     r"^\s*(?P<meal>[A-Za-z_]+|[А-Яа-яЁё]+)\s*[:\-]\s*(?P<body>.+)\s*$"
 )
 
-TXID_RE = re.compile(r"\b([A-Za-z0-9]{10,}|\d{10,})\b")
-
 
 def _is_command(text: str) -> bool:
     return text.strip().startswith("/")
 
 
 def _normalize_meal(meal_raw: str) -> str:
-    m = meal_raw.strip().lower()
+    m = (meal_raw or "").strip().lower()
     return MEAL_ALIASES.get(m, m)
 
 
 def parse_meal_and_body(text: str) -> Tuple[str, str]:
-    """
-    Accepts:
+    """Accepts:
       - "завтрак: яйца и сыр"
       - "lunch - chicken salad"
       - "яйца и сыр" -> other
@@ -91,31 +83,15 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
         return "other", text.strip()
 
     meal = _normalize_meal(m.group("meal"))
-    body = m.group("body").strip()
+    body = (m.group("body") or "").strip()
     if not body:
         body = text.strip()
     return meal, body
 
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-_MEAL_MAP = {
-    # canonical
-    "breakfast": "breakfast",
-    "lunch": "lunch",
-    "dinner": "dinner",
-    "snack": "snack",
-    "other": "other",
-
-    # RU (и твои “закуска:”)
-    "завтрак": "breakfast",
-    "обед": "lunch",
-    "ужин": "dinner",
-    "перекус": "snack",
-    "закуска": "snack",
-    "другое": "other",
-    "прочее": "other",
-}
 
 def _f(x, default: float | None = None) -> float | None:
     if x is None:
@@ -125,19 +101,20 @@ def _f(x, default: float | None = None) -> float | None:
     except Exception:
         return default
 
+
+# -------------------------
+# DB helpers
+# -------------------------
+
 def insert_entry(
     user_id: int,
     day: str,
     meal_type: str,
     text: str,
-    macros: Optional["Macros"],
+    macros: Optional[Macros],
 ) -> None:
-    """
-    Пишет ОДНУ запись в entries:
-    - meal = canonical (breakfast/lunch/dinner/snack/other)
-    - raw_text = оригинальный текст
-    - если macros есть: item_name/qty/unit + макросы
-    - если macros нет: макросы NULL (и это нормально)
+    """Writes ONE entry into entries.
+    If macros is None -> save only raw_text and keep macros NULL (valid).
     """
     meal = _normalize_meal(meal_type)
     raw_text = (text or "").strip()
@@ -153,7 +130,7 @@ def insert_entry(
 
     if macros is not None:
         item_name = (getattr(macros, "name", None) or "").strip() or None
-        qty = _f(getattr(macros, "qty", None), 1.0)  # если qty не пришёл, пусть будет 1
+        qty = _f(getattr(macros, "qty", None), 1.0)
         unit = (getattr(macros, "unit", None) or "serving").strip()
 
         calories = _f(getattr(macros, "calories", None), 0.0)
@@ -181,10 +158,11 @@ def insert_entry(
                 user_id, day, meal, raw_text,
                 item_name, qty, unit,
                 calories, protein, fat, carbs, fiber,
-                _now_iso(),  # или now_iso(), если есть
+                _now_iso(),
             ),
         )
         conn.commit()
+
 
 def get_day_totals(user_id: int, day: str) -> Macros:
     with db() as conn:
@@ -215,101 +193,42 @@ def get_day_totals(user_id: int, day: str) -> Macros:
 
 
 # -------------------------
-# Payment proof routing
+# qty parsing helpers
 # -------------------------
 
-def _get_pending_request_id(context: ContextTypes.DEFAULT_TYPE) -> Optional[int]:
-    rid = context.user_data.get("pending_payment_request_id")
-    if isinstance(rid, int):
-        return rid
-    return None
+QTY_RE = re.compile(
+    r"(?P<qty>\d+(?:[.,]\d+)?)\s*(?P<unit>г|гр|g|kg|кг|мл|ml|л|l|шт|pcs|tsp|tbsp)\b",
+    re.IGNORECASE,
+)
 
 
-async def _handle_possible_payment_proof_text(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    text: str,
-) -> bool:
-    """
-    Returns True if message was treated as payment proof.
-    """
-    user = update.effective_user
-    msg = update.message
-    if not user or not msg:
-        return False
-
-    # If user clicked "I paid" callback earlier, we have the request_id cached.
-    rid = _get_pending_request_id(context)
-
-    # If not cached, but there's a pending request, we can still accept proof.
-    if rid is None:
-        pending = get_pending_payment_request(user.id)
-        rid = int(pending["id"]) if pending else None
-
-    if rid is None:
-        return False
-
-    # Heuristic: either user writes explicitly about payment or includes txid-like token.
+def parse_qty_unit(text: str) -> Optional[Tuple[float, str]]:
     t = text.strip().lower()
-    looks_like_payment = any(k in t for k in ("оплат", "pix", "чек", "квит", "payment", "paid", "transfer"))
-    has_txid = TXID_RE.search(text) is not None
-
-    if not (looks_like_payment or has_txid):
-        return False
-
-    attach_payment_proof(rid, proof_text=text.strip())
-    await notify_admins_about_payment(context, rid, user.id)
-
-    # clear cached request id (so normal food logging continues)
-    context.user_data.pop("pending_payment_request_id", None)
-
-    await msg.reply_text(
-        f"Принято ✅\n"
-        f"Я отправила подтверждение админам.\n"
-        f"ID заявки: {rid}"
-    )
-    return True
+    if t in {"стандарт", "standard"}:
+        return None
+    m = QTY_RE.search(t)
+    if not m:
+        return None
+    qty = float(m.group("qty").replace(",", "."))
+    unit = m.group("unit").lower()
+    unit_map = {
+        "гр": "g", "г": "g", "g": "g",
+        "кг": "kg", "kg": "kg",
+        "мл": "ml", "ml": "ml",
+        "л": "l", "l": "l",
+        "шт": "pcs", "pcs": "pcs",
+        "tsp": "tsp", "tbsp": "tbsp",
+    }
+    return qty, unit_map.get(unit, unit)
 
 
-async def _handle_payment_proof_photo(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-) -> bool:
-    """
-    Returns True if photo was treated as payment proof.
-    """
-    user = update.effective_user
-    msg = update.message
-    if not user or not msg or not msg.photo:
-        return False
-
-    rid = _get_pending_request_id(context)
-    if rid is None:
-        pending = get_pending_payment_request(user.id)
-        rid = int(pending["id"]) if pending else None
-    if rid is None:
-        return False
-
-    file_id = msg.photo[-1].file_id
-    attach_payment_proof(rid, proof_file_id=file_id)
-    mark_payment_request_proof_received(rid)
-    await notify_admins_about_payment(context, rid, user.id)
-
-    context.user_data.pop("pending_payment_request_id", None)
-
-    await msg.reply_text(
-        f"Чек получен ✅\n"
-        f"Я отправила админам на проверку.\n"
-        f"ID заявки: {rid}"
-    )
-    return True
+def user_provided_qty(text: str) -> bool:
+    return bool(QTY_RE.search(text))
 
 
 # -------------------------
 # Food logging routing (MVP)
 # -------------------------
-
-from typing import Optional
 
 async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     user = update.effective_user
@@ -342,7 +261,6 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         await msg.reply_text("Не смогла распознать еду в сообщении. Напиши чуть подробнее.")
         return
 
-    # сохраняем КАЖДЫЙ item отдельной строкой (это то, что нужно для /today списка)
     await _save_items_and_reply(
         update=update,
         uid=user.id,
@@ -364,7 +282,6 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     day = today_str()
     photo = msg.photo[-1]
 
-    # Если пользователь добавил подпись к фото, попробуем вытащить из неё meal (завтрак/обед/...) как в тексте.
     caption = (msg.caption or "").strip()
     if caption:
         meal_type, body = parse_meal_and_body(caption)
@@ -381,7 +298,6 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             profile_hint=profile_hint,
         )
     except Exception:
-        # AI может упасть или не суметь оценить фото — в этом случае честный fallback.
         insert_entry(
             user_id=user.id,
             day=day,
@@ -390,9 +306,9 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             macros=None,
         )
         await msg.reply_text(
-            """Фото записано ✅
-            "Пока без КБЖУ (не смогла оценить по фото). "
-            "Добавь подпись текстом (что это и сколько), и я посчитаю точнее."""
+            "Фото записано ✅\n"
+            "Пока без КБЖУ (не смогла оценить по фото).\n"
+            "Добавь подпись текстом (что это и сколько), и я посчитаю точнее."
         )
         return
 
@@ -405,13 +321,12 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             macros=None,
         )
         await msg.reply_text(
-            """Фото записано ✅
-            "Но по фото я не смогла уверенно распознать еду. "
-            "Добавь подпись текстом (что это и сколько), и я посчитаю."""
+            "Фото записано ✅\n"
+            "Но по фото я не смогла уверенно распознать еду.\n"
+            "Добавь подпись текстом (что это и сколько), и я посчитаю."
         )
         return
 
-    # Сохраняем items тем же путём, что и текстовые записи (это важно для /today, /week и аналитики).
     meta = meta or {"assumptions": []}
     meta.setdefault("assumptions", [])
 
@@ -432,7 +347,7 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 # -------------------------
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # в самом начале on_text
+    # contact mode: forward to admin then exit
     if context.user_data.get("contact_mode"):
         text = update.effective_message.text or ""
         await context.bot.send_message(
@@ -443,7 +358,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 f"Username: @{update.effective_user.username}\n"
                 f"Имя: {update.effective_user.first_name}\n\n"
                 f"Текст:\n{text}"
-            )
+            ),
         )
         context.user_data["contact_mode"] = False
         await update.effective_message.reply_text("✅ Сообщение отправлено администратору.")
@@ -455,16 +370,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     text = msg.text
 
-    # Ignore commands; commands live in handlers/commands.py
+    # commands live in handlers/commands.py
     if _is_command(text):
         return
 
-    # Payment proof flow (text)
-    handled = await _handle_possible_payment_proof_text(update, context, text)
-    if handled:
-        return
-
-    # Otherwise treat as food log
     await _log_food_text(update, context, text)
 
 
@@ -472,70 +381,17 @@ async def on_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg or not msg.photo:
         return
-
-    # Payment proof flow (photo)
-    handled = await _handle_payment_proof_photo(update, context)
-    if handled:
-        return
-
-    # Otherwise treat as food photo
     await _log_food_photo(update, context)
 
 
 async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Optional: welcome message when bot is added to a group.
-    """
     msg = update.message
     if not msg or not msg.new_chat_members:
         return
-
-    # Don't spam; simple acknowledgement.
     await msg.reply_text(
         "Привет! Я тут, чтобы вести дневник питания и считать КБЖУ.\n"
         "Пиши что съела (например: 'завтрак: яйца и сыр') или пришли фото еды."
     )
-
-
-# -------------------------
-# qty parsing helpers
-# -------------------------
-
-QTY_RE = re.compile(
-    r"(?P<qty>\d+(?:[.,]\d+)?)\s*(?P<unit>г|гр|g|kg|кг|мл|ml|л|l|шт|pcs|tsp|tbsp)\b",
-    re.IGNORECASE,
-)
-
-def parse_qty_unit(text: str) -> Optional[Tuple[float, str]]:
-    t = text.strip().lower()
-    if t in {"стандарт", "standard"}:
-        return None  # special handled outside
-    m = QTY_RE.search(t)
-    if not m:
-        return None
-    qty = float(m.group("qty").replace(",", "."))
-    unit = m.group("unit").lower()
-    # normalize units
-    unit_map = {
-        "гр": "g", "г": "g", "g": "g",
-        "кг": "kg", "kg": "kg",
-        "мл": "ml", "ml": "ml",
-        "л": "l", "l": "l",
-        "шт": "pcs", "pcs": "pcs",
-        "tsp": "tsp", "tbsp": "tbsp",
-    }
-    return qty, unit_map.get(unit, unit)
-
-
-def user_provided_qty(text: str) -> bool:
-    return bool(QTY_RE.search(text))
-
-
-# -------------------------
-# IMPORTANT:
-# items returned by ai_estimate are expected to have:
-# it.name, it.qty, it.unit, it.calories, it.protein, it.fat, it.carbs, it.fiber
-# -------------------------
 
 
 async def handle_log(
@@ -545,21 +401,19 @@ async def handle_log(
     meal: str,
     text: str,
 ) -> None:
+    """Legacy-compatible handler used by some older flows.
+    Keeps the 'ask for qty' UX and writes entries one-per-item.
+    """
     uid = u["user_id"]
     d = today_str()
     msg = update.effective_message
     if not msg:
         return
 
-    # Optional: gate some features behind subscription (up to you)
-    # logging itself usually should work for everyone.
-    # if not is_subscribed(uid): ...
-
-    # 1) If we were waiting for qty from previous message, handle it first
+    # 1) Awaiting qty from previous prompt
     if context.user_data.get("await_qty"):
         awaited = context.user_data["await_qty"]
 
-        # only treat THIS message as qty answer (user typically replies right after prompt)
         parsed = parse_qty_unit(text)
         if text.strip().lower() in {"стандарт", "standard"}:
             parsed = (awaited["suggest_qty"], awaited["suggest_unit"])
@@ -570,7 +424,6 @@ async def handle_log(
 
         qty, unit = parsed
 
-        # continue the flow using saved context
         meal = awaited["meal"]
         original_text = awaited["text"]
         replaced_text = awaited.get("replaced_text") or original_text
@@ -578,7 +431,6 @@ async def handle_log(
         confidence = awaited.get("confidence")
         meta = awaited.get("meta") or {"assumptions": []}
 
-        # re-run AI estimate to get items (or you can just patch single item if you store it)
         items, confidence2, meta2 = ai_estimate(text=replaced_text, meal_hint=meal, profile_hint=profile_hint)
         if meta2:
             meta = meta2
@@ -590,15 +442,11 @@ async def handle_log(
             await msg.reply_text("Не смогла восстановить запись. Попробуй ещё раз описать продукт.")
             return
 
-        # patch qty/unit for the single item we asked about
-        # we only ask qty when len(items)==1, so:
         items[0].qty = qty
         items[0].unit = unit
 
-        # clear await state
         context.user_data.pop("await_qty", None)
 
-        # proceed to save
         await _save_items_and_reply(
             update=update,
             uid=uid,
@@ -624,10 +472,10 @@ async def handle_log(
     meta = meta or {"assumptions": []}
     meta.setdefault("assumptions", [])
 
-    # If user didn't provide qty and this is a single item -> ask for qty
+    # ask qty if single item and user didn't specify
     if not user_provided_qty(text) and items and len(items) == 1:
         it = items[0]
-        suggestion = suggest_portion(it.name)  # expected: (qty, unit) or None
+        suggestion = suggest_portion(it.name)  # (qty, unit) or None
 
         if suggestion:
             s_qty, s_unit = suggestion
@@ -644,7 +492,6 @@ async def handle_log(
                 f"Напиши количество, например: 100 г или 1 шт."
             )
 
-        # save await context
         context.user_data["await_qty"] = {
             "meal": meal,
             "text": text,
@@ -660,7 +507,6 @@ async def handle_log(
 
     if alias_notes:
         meta["assumptions"].extend(alias_notes)
-        meta["notes"] = (meta.get("notes") or "") + (" | aliases applied" if meta.get("notes") else "aliases applied")
 
     if not items:
         await msg.reply_text("Я не знаю эту команду. Чтобы увидеть возможности, набери /help")
@@ -712,9 +558,10 @@ async def _save_items_and_reply(
                     uid, day, meal, raw_text,
                     it.name, it.qty, it.unit,
                     it.calories, it.protein, it.fat, it.carbs, it.fiber,
-                    confidence, meta_json, created_at
+                    confidence, meta_json, created_at,
                 ),
             )
+        conn.commit()
 
     lines = [f"добавлено ({meal_to_ru(meal)}):"]
     for it in items:
@@ -729,50 +576,17 @@ async def _save_items_and_reply(
     await msg.reply_text("\n".join(lines))
 
 
-async def contact_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    msg = update.message
-    if not user or not msg:
-        return
-
-    if not context.user_data.get("contact_mode"):
-        return  # это не контактный режим
-
-    text = msg.text or ""
-
-    # пересылаем тебе
-    await context.bot.send_message(
-        chat_id=ADMIN_USER_ID,
-        text=(
-            "📩 Сообщение от пользователя\n\n"
-            f"ID: {user.id}\n"
-            f"Username: @{user.username}\n"
-            f"Имя: {user.first_name}\n\n"
-            f"Текст:\n{text}"
-        )
-    )
-
-    context.user_data["contact_mode"] = False
-
-    await msg.reply_text("✅ Сообщение отправлено администратору.")
-
 async def _estimate_macros_from_telegram_photo(
     bot,
     file_id: str,
     meal_hint: str,
     profile_hint: dict,
 ) -> tuple[list, float, dict]:
-    """
-    Скачивает фото из Telegram и вызывает ai_estimate_photo(image_bytes,...).
-    Возвращает: items, confidence, meta
-    """
+    """Download Telegram photo and call ai_estimate_photo(image_bytes, ...)."""
     tg_file = await bot.get_file(file_id)
-
-    # Скачиваем bytes в память
     data = await tg_file.download_as_bytearray()
     image_bytes = bytes(data)
 
-    # MIME: Telegram не даёт напрямую, но file_path обычно оканчивается на .jpg
     path = (tg_file.file_path or "").lower()
     if path.endswith(".png"):
         image_mime = "image/png"
