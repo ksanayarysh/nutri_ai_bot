@@ -1,11 +1,18 @@
 from __future__ import annotations
-from datetime import datetime, timezone
+
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 
 from src.db import db
 
 
 def get_subscription(user_id: int) -> Optional[Dict[str, Any]]:
+    """Return subscription row for a user (or None).
+
+    Expected semantics:
+    - status == 'active' AND (expires_at is NULL OR expires_at > now) => subscribed
+    - expires_at NULL means 'forever'
+    """
     with db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -30,6 +37,7 @@ def get_subscription(user_id: int) -> Optional[Dict[str, Any]]:
 
 
 def is_subscribed(user_id: int) -> bool:
+    """True if the user currently has access."""
     sub = get_subscription(user_id)
     if not sub:
         return False
@@ -41,11 +49,23 @@ def is_subscribed(user_id: int) -> bool:
         return True
 
     now = datetime.now(timezone.utc)
-    # expires_at из Postgres обычно timezone-aware, это ок
+    # expires_at from Postgres is typically timezone-aware; comparing with UTC-aware now is OK
     return expires_at > now
 
 
-def set_subscription(user_id: int, *, status: str, plan: str | None, expires_at) -> None:
+def set_subscription(
+    user_id: int,
+    *,
+    status: str,
+    expires_at,
+    plan: str | None = None,
+) -> None:
+    """Upsert a subscription row.
+
+    Notes on "plan":
+    - plan is informational (e.g. 'monthly', 'lifetime', 'trial', 'grant').
+    - If plan is None, we keep the existing plan (so callers don't accidentally erase it).
+    """
     now = datetime.now(timezone.utc)
     with db() as conn:
         cur = conn.cursor()
@@ -62,3 +82,47 @@ def set_subscription(user_id: int, *, status: str, plan: str | None, expires_at)
             (user_id, status, plan, expires_at, now, now),
         )
         conn.commit()
+
+
+def grant_subscription(
+    user_id: int,
+    *,
+    days: int | None = 30,
+    plan: str = "monthly",
+) -> None:
+    """Grant access.
+
+    - days=None => forever (expires_at NULL)
+    - days=int => expires_at = now + days
+    """
+    if days is None:
+        expires_at = None
+    else:
+        expires_at = datetime.now(timezone.utc) + timedelta(days=int(days))
+
+    set_subscription(user_id, status="active", plan=plan, expires_at=expires_at)
+
+
+def revoke_subscription(user_id: int, *, plan: str | None = None) -> None:
+    """Revoke access (sets status to 'inactive')."""
+    # Keep expires_at as-is (history), but you can also force it to now if you prefer.
+    sub = get_subscription(user_id)
+    expires_at = sub["expires_at"] if sub else None
+    set_subscription(user_id, status="inactive", plan=plan, expires_at=expires_at)
+
+
+def subscription_status(user_id: int) -> Dict[str, Any]:
+    """Convenience helper for /sub admin command outputs."""
+    sub = get_subscription(user_id)
+    if not sub:
+        return {"exists": False, "subscribed": False}
+
+    return {
+        "exists": True,
+        "subscribed": is_subscribed(user_id),
+        "status": sub["status"],
+        "plan": sub.get("plan"),
+        "expires_at": sub.get("expires_at"),
+        "created_at": sub.get("created_at"),
+        "updated_at": sub.get("updated_at"),
+    }
