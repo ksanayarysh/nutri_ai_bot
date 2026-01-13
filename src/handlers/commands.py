@@ -10,7 +10,7 @@ from src.db import ensure_user, get_targets
 from src.profile import build_profile_hint
 from src.config import PRICE_TEXT, ADMIN_IDS
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from src.config import TZ
 from src.db import db, today_str
 from src.subscriptions import is_subscribed
@@ -53,7 +53,8 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Команды:\n"
         "/today — итоги дня\n"
         "/week — итоги недели\n"
-        "/pay — подписка\n",
+        "/pay — подписка\n"
+        "/help — все, что я умею \n",
         parse_mode="Markdown",
     )
 
@@ -222,7 +223,9 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             """,
             (user.id,),
         )
-        days, calories, protein, fat, carbs, net_carbs = cur.fetchone()
+        days, calories, protein, fat, carbs, fiber = cur.fetchone()
+
+    net_carbs = max(float(carbs or 0) - float(fiber or 0), 0.0)
 
     await update.message.reply_text(
         f"📈 Итоги за 7 дней:\n\n"
@@ -1071,82 +1074,6 @@ async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 def _is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
-from datetime import datetime, timedelta, timezone
-from src.subscriptions import set_subscription
-from src.payments import (
-    get_payment_request_by_id,
-    mark_payment_request_approved,
-    mark_payment_request_rejected,
-)
-
-async def cmd_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    msg = update.message
-    if not user or not msg:
-        return
-    if not _is_admin(user.id):
-        return
-
-    if not context.args or len(context.args) < 2:
-        await msg.reply_text("Формат: /approve <request_id> <days|forever> [plan]")
-        return
-
-    rid = int(context.args[0])
-    days_raw = context.args[1].lower()
-    plan = context.args[2] if len(context.args) > 2 else None
-
-    req = get_payment_request_by_id(rid)
-    if not req:
-        await msg.reply_text("Не нашла такую заявку.")
-        return
-
-    target_user_id = int(req["user_id"])
-
-    now = datetime.now(timezone.utc)
-    if days_raw == "forever":
-        expires_at = None
-    else:
-        days = int(days_raw)
-        expires_at = now + timedelta(days=days)
-
-    # 1) подписка
-    set_subscription(target_user_id, status="active", plan=plan, expires_at=expires_at)
-
-    # 2) заявка
-    mark_payment_request_approved(rid)
-
-    await msg.reply_text(f"✅ Подписка активирована для user_id={target_user_id}, expires_at={expires_at or 'forever'}")
-
-async def cmd_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    msg = update.message
-    if not user or not msg:
-        return
-    if not _is_admin(user.id):
-        return
-
-    if not context.args:
-        await msg.reply_text("Формат: /reject <request_id> [reason]")
-        return
-
-    rid = int(context.args[0])
-    reason = " ".join(context.args[1:]) if len(context.args) > 1 else None
-
-    req = get_payment_request_by_id(rid)
-    if not req:
-        await msg.reply_text("Не нашла такую заявку.")
-        return
-
-    mark_payment_request_rejected(rid, reason=reason)
-    await msg.reply_text("❌ Отклонено.")
-
-from datetime import datetime, timedelta, timezone
-from telegram import Update
-from telegram.ext import ContextTypes
-
-from src.db import db
-from src.config import ADMIN_IDS
-
 async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     msg = update.message
@@ -1219,8 +1146,6 @@ async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         # если пользователь не писал боту или блокнул, просто молчим
         pass
-
-from datetime import datetime, timezone
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
