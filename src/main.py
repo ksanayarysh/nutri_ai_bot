@@ -5,7 +5,6 @@ import logging
 
 from telegram.ext import (
     ApplicationBuilder,
-    CallbackQueryHandler,
     CommandHandler,
     MessageHandler,
     filters,
@@ -15,10 +14,30 @@ from src.config import TELEGRAM_TOKEN
 from src.db import init_db
 from src.jobs.jobs import setup_jobs
 from src.logging_setup import setup_logging
-from src.payments import on_paidproof_callback, cmd_pay
-from src.handlers.commands import cmd_start, cmd_help, cmd_today, cmd_week, cmd_profile, cmd_analyze, cmd_set_targets, \
-    cmd_del, cmd_edit, cmd_analyze_today, cmd_myid, cmd_contact, cmd_cancel, cmd_goals, cmd_progress, cmd_streak, \
-    cmd_notify, cmd_notify_time, cmd_notify_weekly, cmd_approve, cmd_reject, cmd_grant, cmd_sub
+from src.payments import cmd_pay
+from src.handlers.commands import (
+    cmd_start,
+    cmd_help,
+    cmd_today,
+    cmd_week,
+    cmd_profile,
+    cmd_analyze,
+    cmd_set_targets,
+    cmd_del,
+    cmd_edit,
+    cmd_analyze_today,
+    cmd_myid,
+    cmd_contact,
+    cmd_cancel,
+    cmd_goals,
+    cmd_progress,
+    cmd_streak,
+    cmd_notify,
+    cmd_notify_time,
+    cmd_notify_weekly,
+    cmd_grant,
+    cmd_sub,
+)
 from src.handlers.messages import on_text, on_photo, on_new_members
 
 try:
@@ -37,11 +56,9 @@ logger = logging.getLogger("nutribot")
 def build_app():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-    # 1) callbacks
-    app.add_handler(CallbackQueryHandler(on_paidproof_callback, pattern=r"^paidproof:\d+$"))
-
-    # 2) commands
+    # commands
     app.add_handler(CommandHandler("pay", cmd_pay))
+
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(CommandHandler("today", cmd_today))
@@ -66,22 +83,17 @@ def build_app():
     app.add_handler(CommandHandler("notify", cmd_notify))
     app.add_handler(CommandHandler("notify_time", cmd_notify_time))
     app.add_handler(CommandHandler("notify_weekly", cmd_notify_weekly))
-    app.add_handler(CommandHandler("progress", cmd_progress))
-    app.add_handler(CommandHandler("streak", cmd_streak))
 
-    app.add_handler(CommandHandler("approve", cmd_approve))
-    app.add_handler(CommandHandler("reject", cmd_reject))
+    # admin / subscriptions
     app.add_handler(CommandHandler("grant", cmd_grant))
     app.add_handler(CommandHandler("sub", cmd_sub))
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
-
-    # 3) messages
+    # messages
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, on_new_members))
 
-    # 4) global error handler
+    # global error handler
     if global_error_handler:
         app.add_error_handler(global_error_handler)
 
@@ -89,11 +101,13 @@ def build_app():
 
 
 def main() -> None:
-    init_db()
     setup_logging()
+    init_db()
+
     app = build_app()
-    logger.info("Bot started")
     setup_jobs(app)
+
+    logger.info("Bot started (polling)")
     app.run_polling(allowed_updates=None)
 
 
