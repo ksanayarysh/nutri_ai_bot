@@ -6,6 +6,7 @@ import logging
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
     filters,
 )
@@ -14,7 +15,7 @@ from src.config import TELEGRAM_TOKEN
 from src.db import init_db
 from src.jobs.jobs import setup_jobs
 from src.logging_setup import setup_logging
-from src.payments import cmd_pay
+from src.payments import cmd_pay, on_pay_callback
 from src.handlers.commands import (
     cmd_start,
     cmd_help,
@@ -58,6 +59,7 @@ def build_app():
 
     # commands
     app.add_handler(CommandHandler("pay", cmd_pay))
+    app.add_handler(CallbackQueryHandler(on_pay_callback, pattern=r"^pay:"))
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))

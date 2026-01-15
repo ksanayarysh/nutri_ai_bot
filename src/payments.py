@@ -6,8 +6,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
 
 import psycopg2.extras
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import ContextTypes
+import httpx
+try:
+    from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+    from telegram.ext import ContextTypes
+except Exception:  # pragma: no cover
+    # Webhooks service doesn't need Telegram deps
+    InlineKeyboardButton = InlineKeyboardMarkup = Update = object  # type: ignore
+    ContextTypes = object  # type: ignore
 
 from src.config import PAYMENT_INSTRUCTIONS
 from src.db import db, now_iso
@@ -65,36 +71,70 @@ def _create_yookassa_payment(*, amount: float, currency: str, description: str) 
     return {"id": str(pid), "pay_url": str(url), "raw": data}
 
 
-def _create_mercadopago_pix(*, amount: float, description: str) -> Dict[str, Any]:
-    """
-    Must return:
-      { "id": "<provider_payment_id>", "ticket_url": "...", "qr_code": "...", "qr_code_base64": "..." }
-    """
-    try:
-        from src.providers.mercadopago import create_payment_pix as create_payment_impl  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError("Mercado Pago provider is not wired: src/providers/mercadopago.py") from e
+def _create_mercadopago_pix(*, amount: float, description: str, external_reference: str | None = None) -> Dict[str, Any]:
+    """Create a Pix payment in Mercado Pago.
 
-    data = create_payment_impl(amount=amount, description=description)
+    Returns dict with keys:
+      - id (provider_payment_id)
+      - ticket_url (optional)
+      - qr_code (optional)
+      - qr_code_base64 (optional)
+      - raw (full provider response)
+
+    Notes:
+    - Mercado Pago requires a payer.email. We use env MP_PAYER_EMAIL or a harmless placeholder.
+    """
+    token = os.getenv("MP_ACCESS_TOKEN")
+    if not token:
+        raise RuntimeError("MP_ACCESS_TOKEN is not set")
+
+    payer_email = os.getenv("MP_PAYER_EMAIL", "payer@example.com")
+
+    payload: Dict[str, Any] = {
+        "transaction_amount": float(amount),
+        "description": description,
+        "payment_method_id": "pix",
+        "payer": {"email": payer_email},
+    }
+    if external_reference:
+        payload["external_reference"] = external_reference
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    r = httpx.post("https://api.mercadopago.com/v1/payments", json=payload, headers=headers, timeout=20.0)
+    r.raise_for_status()
+    data = r.json()
+
     pid = data.get("id")
     if not pid:
         raise RuntimeError(f"Bad MercadoPago response: {data}")
-    return {"id": str(pid), "raw": data}
 
-
+    tx = (data.get("point_of_interaction") or {}).get("transaction_data") or {}
+    return {
+        "id": str(pid),
+        "ticket_url": tx.get("ticket_url"),
+        "qr_code": tx.get("qr_code"),
+        "qr_code_base64": tx.get("qr_code_base64"),
+        "raw": data,
+    }
 def _mercadopago_get_status(provider_payment_id: str) -> str:
-    """Optional: pull current payment status from Mercado Pago API."""
-    try:
-        from src.providers.mercadopago import get_payment_status  # type: ignore
-    except Exception as e:  # pragma: no cover
-        raise RuntimeError("Mercado Pago status API is not wired: src/providers/mercadopago.py") from e
-    return str(get_payment_status(provider_payment_id))
+    """Pull current payment status from Mercado Pago API."""
+    token = os.getenv("MP_ACCESS_TOKEN")
+    if not token:
+        raise RuntimeError("MP_ACCESS_TOKEN is not set")
 
-
-# =====================
-# DB helpers
-# =====================
-
+    headers = {"Authorization": f"Bearer {token}"}
+    url = f"https://api.mercadopago.com/v1/payments/{provider_payment_id}"
+    r = httpx.get(url, headers=headers, timeout=20.0)
+    # If the id is fake (like 123456 from simulator), MP returns 404. Treat as pending.
+    if r.status_code == 404:
+        return "not_found"
+    r.raise_for_status()
+    data = r.json()
+    return str(data.get("status") or "")
 def create_payment(
     *,
     user_id: int,
