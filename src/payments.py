@@ -107,7 +107,12 @@ def _create_mercadopago_pix(*, amount: float, description: str, external_referen
     }
 
     r = httpx.post("https://api.mercadopago.com/v1/payments", json=payload, headers=headers, timeout=20.0)
-    r.raise_for_status()
+
+    if r.status_code >= 400:
+        print("MP payload:", payload)
+        print("MP response:", r.status_code, r.text)  # ВОТ ТУТ ИСТИНА
+        r.raise_for_status()
+
     data = r.json()
 
     logging.INFO(payload)
