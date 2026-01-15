@@ -21,6 +21,36 @@ from src.jobs.notifications import (
     set_daily_time_hhmm,
 )
 
+from typing import Optional
+
+SUPPORTED_LANGS = {"ru", "pt"}  # можно расширить потом
+
+def _normalize_lang(raw: Optional[str]) -> str:
+    if not raw:
+        return "ru"
+    raw = raw.lower().strip()
+    if raw.startswith("pt"):
+        return "pt"
+    if raw.startswith("ru"):
+        return "ru"
+    return "ru"
+
+def get_user_language(user_id: int) -> str:
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT language FROM users WHERE user_id = %s", (user_id,))
+        row = cur.fetchone()
+    return _normalize_lang(row[0] if row else None)
+
+def set_user_language(user_id: int, lang: str) -> None:
+    lang = _normalize_lang(lang)
+    if lang not in SUPPORTED_LANGS:
+        lang = "ru"
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET language = %s WHERE user_id = %s", (lang, user_id))
+        conn.commit()
+
 
 UNIT_LABELS = {
     "pcs": "шт",
@@ -571,7 +601,9 @@ async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # 3) прогнать ai_estimate по новому тексту (ожидаем 1 item)
     try:
-        profile_hint = build_profile_hint({"user_id": user.id})
+        lang = get_user_language(user.id)
+        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
+
         items, confidence, meta = ai_estimate(
             text=new_text,
             meal_hint=meal or "other",
@@ -729,7 +761,9 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         }
 
     try:
-        profile_hint = build_profile_hint({"user_id": user.id})
+        lang = get_user_language(user.id)
+        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
+
         analysis = ai_daily_analysis_ru(
             profile_hint=profile_hint,
             day=day,
@@ -1202,3 +1236,55 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Создано: {created_at}\n"
         f"Обновлено: {updated_at}"
     )
+
+async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    # на всякий случай, чтобы запись точно была
+    ensure_user(user.id, user.username, user.first_name)
+
+    args = context.args or []
+
+    # если язык не задан явно, пытаемся подсказать дефолт по Telegram language_code (pt/ru)
+    tg_guess = _normalize_lang(getattr(user, "language_code", None))
+
+    if not args:
+        current = get_user_language(user.id)
+
+        if current == "pt":
+            await msg.reply_text(
+                "Idioma atual: PT-BR 🇧🇷\n\n"
+                "Para trocar:\n"
+                "• /lang ru (Русский)\n"
+                "• /lang pt (Português)"
+            )
+        else:
+            await msg.reply_text(
+                "Текущий язык: RU 🇷🇺\n\n"
+                "Чтобы сменить:\n"
+                "• /lang pt (Português)\n"
+                "• /lang ru (Русский)"
+            )
+        return
+
+    requested = _normalize_lang(args[0])
+
+    if requested not in SUPPORTED_LANGS:
+        # мягко объясняем, что ты опять написала ерунду
+        current = get_user_language(user.id)
+        if current == "pt":
+            await msg.reply_text("Idioma inválido. Use /lang pt ou /lang ru.")
+        else:
+            await msg.reply_text("Неверный язык. Используй /lang pt или /lang ru.")
+        return
+
+    set_user_language(user.id, requested)
+
+    # подтверждение на новом языке
+    if requested == "pt":
+        await msg.reply_text("Pronto! Agora o idioma é PT-BR 🇧🇷")
+    else:
+        await msg.reply_text("Готово! Теперь язык — русский 🇷🇺")

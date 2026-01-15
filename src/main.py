@@ -37,7 +37,7 @@ from src.handlers.commands import (
     cmd_notify_time,
     cmd_notify_weekly,
     cmd_grant,
-    cmd_sub,
+    cmd_sub, cmd_lang,
 )
 from src.handlers.messages import on_text, on_photo, on_new_members
 
@@ -89,6 +89,9 @@ def build_app():
     # admin / subscriptions
     app.add_handler(CommandHandler("grant", cmd_grant))
     app.add_handler(CommandHandler("sub", cmd_sub))
+
+    app.add_handler(CommandHandler("lang", cmd_lang))
+    app.add_handler(CommandHandler("language", cmd_lang))  # опционально алиас
 
     # messages
     app.add_handler(MessageHandler(filters.PHOTO, on_photo))

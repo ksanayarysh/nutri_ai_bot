@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 
 from src.config import TZ
 from src.db import db, get_targets
+from src.handlers.commands import get_user_language
 from src.subscriptions import is_subscribed_user
 from src.ai import ai_daily_analysis_ru
 from src.profile import build_profile_hint
@@ -185,7 +186,9 @@ def build_daily_card(user_id: int, day_iso: str) -> str:
                 "net_carbs": net,
             }
 
-            profile_hint = build_profile_hint({"user_id": user_id})
+            lang = get_user_language(user_id)
+            profile_hint = build_profile_hint({"user_id": user_id, "language": lang})
+
             analysis = ai_daily_analysis_ru(
                 profile_hint=profile_hint,
                 day=day_iso,

@@ -14,6 +14,7 @@ from src.aliases import apply_aliases_to_text
 from src.config import MEAL_ALIASES
 from src.db import db, now_iso, today_str
 from src.food_structure.food import Macros
+from src.handlers.commands import get_user_language
 from src.portions import suggest_portion
 from src.profile import build_profile_hint
 
@@ -241,7 +242,8 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
 
     try:
         replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
-        profile_hint = build_profile_hint({"user_id": user.id})
+        lang = get_user_language(user.id)
+        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
 
         items, confidence, meta = ai_estimate(
             text=replaced_text,
@@ -288,7 +290,8 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     else:
         meal_type, body = "other", "food photo"
 
-    profile_hint = build_profile_hint({"user_id": user.id})
+    lang = get_user_language(user.id)
+    profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
 
     try:
         items, confidence, meta = await _estimate_macros_from_telegram_photo(
@@ -461,7 +464,8 @@ async def handle_log(
 
     # 2) Normal flow
     replaced_text, alias_notes = apply_aliases_to_text(uid, text)
-    profile_hint = build_profile_hint(u)
+    lang = get_user_language(user.id)
+    profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
 
     try:
         items, confidence, meta = ai_estimate(text=replaced_text, meal_hint=meal, profile_hint=profile_hint)
