@@ -318,7 +318,7 @@ def pay_keyboard() -> InlineKeyboardMarkup:
 # You can tune these in config later.
 PLAN_CODE = "monthly"
 PRICE_RUB = 299.00
-PRICE_BRL = 29.90
+PRICE_BRL = 5.90
 
 
 async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
