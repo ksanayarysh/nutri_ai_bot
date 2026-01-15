@@ -7,12 +7,6 @@ from src.db import db
 
 
 def get_subscription(user_id: int) -> Optional[Dict[str, Any]]:
-    """Return subscription row for a user (or None).
-
-    Expected semantics:
-    - status == 'active' AND (expires_at is NULL OR expires_at > now) => subscribed
-    - expires_at NULL means 'forever'
-    """
     with db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -20,6 +14,8 @@ def get_subscription(user_id: int) -> Optional[Dict[str, Any]]:
             SELECT status, plan, expires_at, created_at, updated_at
             FROM subscriptions
             WHERE user_id = %s
+            ORDER BY updated_at DESC
+            LIMIT 1
             """,
             (user_id,),
         )
