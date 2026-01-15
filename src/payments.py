@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -109,10 +110,10 @@ def _create_mercadopago_pix(*, amount: float, description: str, external_referen
     r.raise_for_status()
     data = r.json()
 
-    print(payload)
-    print(headers)
-    print("Mercado PAge response")
-    print(data)
+    logging.INFO(payload)
+    logging.INFO(headers)
+    logging.INFO("Mercado Pago response")
+    logging.INFO(data)
 
     pid = data.get("id")
     if not pid:
