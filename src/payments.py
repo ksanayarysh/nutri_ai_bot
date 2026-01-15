@@ -91,6 +91,13 @@ def _create_mercadopago_pix(*, amount: float, description: str, external_referen
         raise RuntimeError("MP_ACCESS_TOKEN is not set")
 
     payer_email = os.getenv("MP_PAYER_EMAIL", "payer@example.com")
+    import uuid
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Idempotency-Key": str(uuid.uuid4()),
+    }
 
     payload: Dict[str, Any] = {
         "transaction_amount": float(amount),
@@ -100,11 +107,6 @@ def _create_mercadopago_pix(*, amount: float, description: str, external_referen
     }
     if external_reference:
         payload["external_reference"] = external_reference
-
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-    }
 
     r = httpx.post("https://api.mercadopago.com/v1/payments", json=payload, headers=headers, timeout=20.0)
 
