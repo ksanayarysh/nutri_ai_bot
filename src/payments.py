@@ -109,6 +109,8 @@ def _create_mercadopago_pix(*, amount: float, description: str, external_referen
     r.raise_for_status()
     data = r.json()
 
+    print(payload)
+    print(headers)
     print("Mercado PAge response")
     print(data)
 
