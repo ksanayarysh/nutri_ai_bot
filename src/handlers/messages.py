@@ -32,17 +32,79 @@ def net_carbs(carbs: float | None, fiber: float | None) -> float:
     return max(0.0, float(carbs or 0.0) - float(fiber or 0.0))
 
 
-def unit_to_ru(unit: str | None) -> str:
-    return {
-        "g": "г",
-        "kg": "кг",
-        "ml": "мл",
-        "l": "л",
+# --- i18n minimal for /today ---
+
+UNIT_LABELS_BY_LANG = {
+    "ru": {
         "pcs": "шт",
-        "tsp": "ч.л.",
+        "g": "г",
+        "ml": "мл",
         "tbsp": "ст.л.",
+        "tsp": "ч.л.",
         "serving": "порц.",
-    }.get(unit, unit or "")
+    },
+    "pt": {
+        "pcs": "un",
+        "g": "g",
+        "ml": "ml",
+        "tbsp": "col. sopa",
+        "tsp": "col. chá",
+        "serving": "porção",
+    },
+}
+
+MEAL_LABELS = {
+    "ru": {
+        "breakfast": "завтрак",
+        "lunch": "обед",
+        "dinner": "ужин",
+        "snack": "перекус",
+        "other": "другое",
+    },
+    "pt": {
+        "breakfast": "café da manhã",
+        "lunch": "almoço",
+        "dinner": "jantar",
+        "snack": "lanche",
+        "other": "outro",
+    },
+}
+
+TODAY_TEXT = {
+    "ru": {
+        "paywall": "⏳ Эта функция доступна по подписке.\nИспользуй /pay",
+        "empty": "📭 За сегодня пока ничего не записано.",
+        "title": "📋 Сегодня ты съела:",
+        "totals": "📊 Итоги за сегодня:",
+        "kcal": "Ккал",
+        "protein": "Белки",
+        "fat": "Жиры",
+        "carbs": "Углеводы",
+        "net_carbs": "Чистые углеводы",
+        "grams": "г",
+    },
+    "pt": {
+        "paywall": "⏳ Esta função está disponível por assinatura.\nUse /pay",
+        "empty": "📭 Ainda não há registros de hoje.",
+        "title": "📋 Hoje você comeu:",
+        "totals": "📊 Totais de hoje:",
+        "kcal": "Kcal",
+        "protein": "Proteínas",
+        "fat": "Gorduras",
+        "carbs": "Carboidratos",
+        "net_carbs": "Carboidratos líquidos",
+        "grams": "g",
+    },
+}
+
+def _unit_label(lang: str, unit: str) -> str:
+    d = UNIT_LABELS_BY_LANG.get(lang) or UNIT_LABELS_BY_LANG["ru"]
+    return d.get(unit, unit)
+
+def _meal_label(lang: str, meal: str) -> str:
+    meal = (meal or "other").lower().strip()
+    d = MEAL_LABELS.get(lang) or MEAL_LABELS["ru"]
+    return d.get(meal, meal)
 
 
 def meal_to_ru(meal: str) -> str:

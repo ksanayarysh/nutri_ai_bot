@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes
 from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.bot import meal_to_ru
 from src.db import ensure_user, get_targets
+from src.handlers.messages import _meal_label, TODAY_TEXT, _unit_label
 from src.profile import build_profile_hint
 from src.config import ADMIN_IDS
 
@@ -138,11 +139,10 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
+    lang = get_user_language(user.id)  # <-- важно
+
     if not is_subscribed_user(user.id):
-        await update.message.reply_text(
-            "⏳ Эта функция доступна по подписке.\n"
-            "Используй /pay"
-        )
+        await update.message.reply_text((TODAY_TEXT.get(lang) or TODAY_TEXT["ru"])["paywall"])
         return
 
     day = today_str()
@@ -150,7 +150,6 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     with db() as conn:
         cur = conn.cursor()
 
-        # 1️⃣ Полный список еды за день
         cur.execute(
             """
             SELECT
@@ -171,7 +170,6 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         rows = cur.fetchall()
 
-        # 2️⃣ Итоги
         cur.execute(
             """
             SELECT
@@ -187,34 +185,38 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         calories, protein, fat, carbs, fiber = cur.fetchone()
 
+    txt = TODAY_TEXT.get(lang) or TODAY_TEXT["ru"]
+
     if not rows:
-        await update.message.reply_text("📭 За сегодня пока ничего не записано.")
+        await update.message.reply_text(txt["empty"])
         return
 
-    # Группируем по приёму пищи
     meals: dict[str, list[str]] = {}
     i = 1
     for meal, name, qty, unit, cal, p, f, c, fi in rows:
-        meals.setdefault(meal or "закуска", []).append(
-            f"•{i} {name} — {qty:g} {UNIT_LABELS[unit]} "
-            f"({cal:.0f} ккал, Б {p:.1f}, Ж {f:.1f}, У {c:.1f})"
+        meals.setdefault(meal or "other", []).append(
+            f"•{i} {name} — {qty:g} {_unit_label(lang, unit)} "
+            f"({cal:.0f} {txt['kcal'].lower() if lang == 'pt' else 'ккал'}, "
+            f"{'P' if lang=='pt' else 'Б'} {p:.1f}, "
+            f"{'G' if lang=='pt' else 'Ж'} {f:.1f}, "
+            f"{'C' if lang=='pt' else 'У'} {c:.1f})"
         )
         i += 1
 
-    lines = ["📋 Сегодня ты съела:"]
+    lines = [txt["title"]]
     for meal, items in meals.items():
-        lines.append(f"\n🍽 {meal_to_ru(meal)}")
+        lines.append(f"\n🍽 {_meal_label(lang, meal)}")
         lines.extend(items)
 
     net_carbs = max(carbs - fiber, 0)
 
     lines.append(
-        "\n📊 Итоги за сегодня:\n"
-        f"Ккал: {calories:.0f}\n"
-        f"Белки: {protein:.1f} г\n"
-        f"Жиры: {fat:.1f} г\n"
-        f"Углеводы: {carbs:.1f} г\n"
-        f"Чистые углеводы: {net_carbs:.1f} г"
+        "\n" + txt["totals"] + "\n"
+        f"{txt['kcal']}: {calories:.0f}\n"
+        f"{txt['protein']}: {protein:.1f} {txt['grams']}\n"
+        f"{txt['fat']}: {fat:.1f} {txt['grams']}\n"
+        f"{txt['carbs']}: {carbs:.1f} {txt['grams']}\n"
+        f"{txt['net_carbs']}: {net_carbs:.1f} {txt['grams']}"
     )
 
     await update.message.reply_text("\n".join(lines))
