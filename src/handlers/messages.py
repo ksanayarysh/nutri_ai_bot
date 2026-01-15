@@ -14,7 +14,7 @@ from src.aliases import apply_aliases_to_text
 from src.config import MEAL_ALIASES
 from src.db import db, now_iso, today_str
 from src.food_structure.food import Macros
-from src.handlers.commands import get_user_language
+from src.i18n.lang import get_user_language
 from src.portions import suggest_portion
 from src.profile import build_profile_hint
 
@@ -526,8 +526,8 @@ async def handle_log(
 
     # 2) Normal flow
     replaced_text, alias_notes = apply_aliases_to_text(uid, text)
-    lang = get_user_language(user.id)
-    profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
+    lang = get_user_language(uid)
+    profile_hint = build_profile_hint({"user_id": uid, "language": lang})
 
     try:
         items, confidence, meta = ai_estimate(text=replaced_text, meal_hint=meal, profile_hint=profile_hint)

@@ -5,7 +5,6 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from src.ai import ai_estimate, ai_daily_analysis_ru
-from src.bot import meal_to_ru
 from src.db import ensure_user, get_targets
 from src.handlers.messages import _meal_label, TODAY_TEXT, _unit_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
