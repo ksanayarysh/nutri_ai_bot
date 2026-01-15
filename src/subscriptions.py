@@ -5,6 +5,50 @@ from typing import Optional, Dict, Any
 
 from src.db import db
 
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        # убедимся, что timezone-aware
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    if isinstance(value, str):
+        s = value.strip()
+        # поддержка ISO вида ...Z
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def is_subscribed(sub: dict | None) -> bool:
+    """
+    sub ожидается примерно такой:
+    {"status": "active", "expires_at": datetime|str|None}
+    """
+    if not sub:
+        return False
+
+    status = (sub.get("status") or "").lower()
+    if status != "active":
+        return False
+
+    expires_at = _parse_dt(sub.get("expires_at"))
+    if expires_at is None:
+        # NULL = forever
+        return True
+
+    now = datetime.now(timezone.utc)
+    return expires_at > now
+
+
 
 def get_subscription(user_id: int) -> Optional[Dict[str, Any]]:
     with db() as conn:
@@ -31,22 +75,6 @@ def get_subscription(user_id: int) -> Optional[Dict[str, Any]]:
             "updated_at": updated_at,
         }
 
-
-def is_subscribed(user_id: int) -> bool:
-    """True if the user currently has access."""
-    sub = get_subscription(user_id)
-    if not sub:
-        return False
-    if sub["status"] != "active":
-        return False
-
-    expires_at = sub["expires_at"]
-    if expires_at is None:
-        return True
-
-    now = datetime.now(timezone.utc)
-    # expires_at from Postgres is typically timezone-aware; comparing with UTC-aware now is OK
-    return expires_at > now
 
 
 def set_subscription(
