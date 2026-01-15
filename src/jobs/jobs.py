@@ -1,14 +1,13 @@
 # src/jobs.py
 from __future__ import annotations
 
-from datetime import datetime, timedelta, time
-from typing import List, Dict, Any
+from datetime import datetime
 
 from telegram.ext import ContextTypes
 
 from src.config import TZ
-from src.db import db, today_str, get_targets
-from src.subscriptions import is_subscribed
+from src.db import db, get_targets
+from src.subscriptions import is_subscribed_user
 from src.ai import ai_daily_analysis_ru
 from src.profile import build_profile_hint
 from src.jobs.notifications import (
@@ -161,7 +160,7 @@ def build_daily_card(user_id: int, day_iso: str) -> str:
     ]
 
     # AI advice for subscribers only
-    if is_subscribed(user_id) and rows:
+    if is_subscribed_user(user_id) and rows:
         try:
             items_for_ai = []
             for meal, name, qty, unit, cal, p, f, c, fi in rows:
@@ -263,7 +262,7 @@ def build_weekly_card(user_id: int, week_key: str) -> str:
         "• 2) не добивай углеводы вечером",
     ]
 
-    if not is_subscribed(user_id):
+    if not is_subscribed_user(user_id):
         lines.append("")
         lines.append("🔒 Подписка: /pay для более умного weekly-анализа (AI + цели).")
 

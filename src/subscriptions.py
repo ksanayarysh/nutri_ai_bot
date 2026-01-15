@@ -150,3 +150,7 @@ def subscription_status(user_id: int) -> Dict[str, Any]:
         "updated_at": sub.get("updated_at"),
     }
 
+def is_subscribed_user(user_id: int) -> bool:
+    sub = get_subscription(user_id)
+    return is_subscribed(sub)
+

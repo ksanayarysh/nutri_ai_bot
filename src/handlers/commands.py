@@ -8,12 +8,12 @@ from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.bot import meal_to_ru
 from src.db import ensure_user, get_targets
 from src.profile import build_profile_hint
-from src.config import PRICE_TEXT, ADMIN_IDS
+from src.config import ADMIN_IDS
 
 from datetime import datetime, timedelta, timezone
 from src.config import TZ
 from src.db import db, today_str
-from src.subscriptions import is_subscribed
+from src.subscriptions import is_subscribed_user
 from src.jobs.notifications import (
     ensure_notify_settings,
     set_daily_enabled,
@@ -108,7 +108,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await update.message.reply_text(
             "⏳ Эта функция доступна по подписке.\n"
             "Используй /pay"
@@ -199,7 +199,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await update.message.reply_text(
             "⏳ Эта функция доступна по подписке.\n"
             "Используй /pay"
@@ -265,7 +265,7 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         t = cur.fetchone()
 
-    status = "активна ✅" if is_subscribed(user.id) else "не активна ⏳"
+    status = "активна ✅" if is_subscribed_user(user.id) else "не активна ⏳"
 
     lines = [
         "👤 Профиль",
@@ -365,7 +365,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not user or not update.message:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await update.message.reply_text("⏳ Анализ доступен по подписке. Используй /pay")
         return
 
@@ -634,7 +634,7 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not user or not msg:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
         return
 
@@ -945,7 +945,7 @@ async def cmd_streak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not user or not msg:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
         return
 
@@ -1003,7 +1003,7 @@ async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not user or not msg:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
         return
 

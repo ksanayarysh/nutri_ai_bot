@@ -19,7 +19,8 @@ except Exception:  # pragma: no cover
 
 from src.config import PAYMENT_INSTRUCTIONS
 from src.db import db, now_iso
-from src.subscriptions import grant_subscription, is_subscribed
+from src.subscriptions import grant_subscription, is_subscribed_user
+
 
 # =====================
 # Notes / DB expectation
@@ -326,7 +327,7 @@ async def cmd_pay(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
-    if is_subscribed(user.id):
+    if is_subscribed_user(user.id):
         await update.message.reply_text("Доступ уже активен ✅")
         return
 
@@ -353,7 +354,7 @@ async def on_pay_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user_id = query.from_user.id
     data = query.data or ""
 
-    if is_subscribed(user_id):
+    if is_subscribed_user(user_id):
         await query.message.reply_text("Доступ уже активен ✅")
         return
 
