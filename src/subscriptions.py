@@ -41,8 +41,9 @@ def is_subscribed(sub: dict | None) -> bool:
         return False
 
     expires_at = _parse_dt(sub.get("expires_at"))
+
     if expires_at is None:
-        # NULL = forever
+        # NULL = бессрочно
         return True
 
     now = datetime.now(timezone.utc)
@@ -134,19 +135,18 @@ def revoke_subscription(user_id: int, *, plan: str | None = None) -> None:
     expires_at = sub["expires_at"] if sub else None
     set_subscription(user_id, status="inactive", plan=plan, expires_at=expires_at)
 
-
 def subscription_status(user_id: int) -> Dict[str, Any]:
-    """Convenience helper for /sub admin command outputs."""
     sub = get_subscription(user_id)
     if not sub:
         return {"exists": False, "subscribed": False}
 
     return {
         "exists": True,
-        "subscribed": is_subscribed(user_id),
+        "subscribed": is_subscribed(sub),
         "status": sub["status"],
         "plan": sub.get("plan"),
         "expires_at": sub.get("expires_at"),
         "created_at": sub.get("created_at"),
         "updated_at": sub.get("updated_at"),
     }
+
