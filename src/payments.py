@@ -109,6 +109,9 @@ def _create_mercadopago_pix(*, amount: float, description: str, external_referen
     r.raise_for_status()
     data = r.json()
 
+    print("Mercado PAge response")
+    print(data)
+
     pid = data.get("id")
     if not pid:
         raise RuntimeError(f"Bad MercadoPago response: {data}")
