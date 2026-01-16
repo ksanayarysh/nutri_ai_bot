@@ -21,6 +21,9 @@ from src.profile import build_profile_hint
 # Admin chat for "contact me" forwarding
 ADMIN_USER_ID = 452738438
 
+def unit_label(lang: str, unit: str) -> str:
+    return UNIT_LABELS_BY_LANG.get(lang, UNIT_LABELS_BY_LANG["ru"]).get(unit, unit)
+
 
 def fmt(x: float | None) -> str:
     if x is None:
@@ -549,7 +552,7 @@ async def handle_log(
                 f"Ты указала продукт без количества: {it.name}.\n"
                 f"Какое количество учитывать?\n\n"
                 f"Напиши число (например: 100 г)\n"
-                f"или ответь «стандарт» — я возьму {s_qty} {unit_to_ru(s_unit)}."
+                f"или ответь «стандарт» — я возьму {s_qty} {unit_label(lang, s_unit)}."
             )
         else:
             s_qty, s_unit = 0.0, "g"
@@ -629,12 +632,13 @@ async def _save_items_and_reply(
             )
         conn.commit()
 
+    lang = get_user_language(uid)
     lines = [f"добавлено ({meal_to_ru(meal)}):"]
     for it in items:
         fib = float(it.fiber or 0.0)
         net = net_carbs(it.carbs, fib)
         lines.append(
-            f"- {it.name} ({it.qty} {unit_to_ru(it.unit)}): {fmt(it.calories)} ккал, "
+            f"- {it.name} ({it.qty} {unit_label(lang, it.unit)}): {fmt(it.calories)} ккал, "
             f"белки {fmt(it.protein)} г, жиры {fmt(it.fat)} г, углеводы {fmt(it.carbs)} г "
             f"(клетч. {fmt(fib)} г, чистые {fmt(net)} г)"
         )
