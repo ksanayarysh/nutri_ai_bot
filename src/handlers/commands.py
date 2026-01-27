@@ -6,7 +6,9 @@ from telegram.ext import ContextTypes
 
 from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.db import ensure_user, get_targets
+from src.handlers.messages import meal_label, unit_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
+from src.i18n.t import t
 from src.profile import build_profile_hint
 from src.config import ADMIN_IDS
 
