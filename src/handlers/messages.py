@@ -15,6 +15,7 @@ from src.config import MEAL_ALIASES
 from src.db import db, now_iso, today_str
 from src.food_structure.food import Macros
 from src.i18n.lang import get_user_language
+from src.i18n.t import t
 from src.portions import suggest_portion
 from src.profile import build_profile_hint
 
@@ -22,6 +23,10 @@ from src.profile import build_profile_hint
 ADMIN_USER_ID = 452738438
 
 def unit_label(lang: str, unit: str) -> str:
+    # Prefer i18n keys; fallback to legacy dicts.
+    val = t(f"unit.{unit}", lang)
+    if val != f"unit.{unit}":
+        return val
     return UNIT_LABELS_BY_LANG.get(lang, UNIT_LABELS_BY_LANG["ru"]).get(unit, unit)
 
 
@@ -633,14 +638,28 @@ async def _save_items_and_reply(
         conn.commit()
 
     lang = get_user_language(uid)
-    lines = [f"добавлено ({meal_to_ru(meal)}):"]
+    meal_lbl = t(f"meal.{meal}", lang)
+    if meal_lbl == f"meal.{meal}":
+        # fallback to existing helper if key is missing
+        meal_lbl = meal_to_ru(meal)
+    lines = [t("log.added_header", lang, meal=meal_lbl)]
     for it in items:
         fib = float(it.fiber or 0.0)
         net = net_carbs(it.carbs, fib)
         lines.append(
-            f"- {it.name} ({it.qty} {unit_label(lang, it.unit)}): {fmt(it.calories)} ккал, "
-            f"белки {fmt(it.protein)} г, жиры {fmt(it.fat)} г, углеводы {fmt(it.carbs)} г "
-            f"(клетч. {fmt(fib)} г, чистые {fmt(net)} г)"
+            t(
+                "log.item_line",
+                lang,
+                name=it.name,
+                qty=it.qty,
+                unit=unit_label(lang, it.unit),
+                kcal=fmt(it.calories),
+                protein=fmt(it.protein),
+                fat=fmt(it.fat),
+                carbs=fmt(it.carbs),
+                fiber=fmt(fib),
+                net=fmt(net),
+            )
         )
 
     await msg.reply_text("\n".join(lines))
