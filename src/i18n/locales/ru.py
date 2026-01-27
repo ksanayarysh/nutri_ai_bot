@@ -24,6 +24,7 @@ RU = {
   "notify_time.ok": 'Ок ✅ Буду присылать ежедневный отчёт в {hhmm} (по твоему часовому поясу).',
   "log.added_header": 'добавлено ({meal}):',
   "log.item_line": '- {name} ({qty} {unit}): {kcal} ккал, белки {protein} г, жиры {fat} г, углеводы {carbs} г (клетч. {fiber} г, чистые {net} г)',
+  "log.deleted": '🗑 Удалила запись: {name}',
   "meal.breakfast": 'завтрак',
   "meal.dinner": 'ужин',
   "meal.lunch": 'обед',

@@ -1,7 +1,7 @@
 from .locales.ru import RU
 from .locales.pt_br import PT_BR
 
-MAP = {"ru": RU, "pt": PT_BR}  # <-- вот это важно
+MAP = {"ru": RU, "pt": PT_BR, "pt_BR": PT_BR, "pt-br": PT_BR}
 
 def t(key: str, lang: str = "ru", **kwargs) -> str:
     d = MAP.get(lang, RU)

@@ -45,65 +45,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     ensure_user(user.id, user.username, user.first_name)
 
+    lang = get_user_language(user.id)
+
     await update.message.reply_text(
-        "Привет! 👋\n\n"
-        "Я нутри-бот — помогаю вести дневник питания, "
-        "считать КБЖУ и видеть закономерности.\n\n"
-        "Просто напиши, что ты съела, например:\n"
-        "`завтрак: яйца и сыр`\n"
-        "или пришли фото еды 📸\n\n"
-        "Команды:\n"
-        "/today — итоги дня\n"
-        "/week — итоги недели\n"
-        "/pay — подписка\n"
-        "/help — все, что я умею \n",
+        t("start.text", lang),
         parse_mode="Markdown",
     )
 
-
-# -------------------------
-# /help
-# -------------------------
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     msg = update.message
     if not msg:
         return
 
-    await msg.reply_text(
-        "📌 Команды NutriHelper:\n\n"
-        "🆓 Базовое (бесплатно)\n"
-        "• /start — старт\n"
-        "• /help — справка\n"
-        "• /pay — подписка/оплата\n"
-        "• /myid — твой Telegram ID (для идентификации платежа)\n"
-        "• /contact — написать администратору\n"
-        "• /cancel — отменить режим /contact\n\n"
-        "📝 Дневник\n"
-        "• просто напиши: `завтрак: яйца и сыр`\n"
-        "• /del <n> — удалить запись #n из сегодняшнего списка (см. /today)\n"
-        "• /edit <n> <новый текст> — заменить запись #n (пример: /edit 2 огурец 200 г)\n\n"
-        "🎯 Цели (targets)\n"
-        "• /set_targets <kcal> <protein> <fat> <carbs> <net_carbs> [mode]\n"
-        "  пример: /set_targets 1400 90 70 30 20 keto\n"
-        "• /goals — показать текущие цели\n\n"
-        "🔔 Уведомления\n"
-        "• /notify on|off — ежедневный авто-отчёт (в 21:00)\n"
-        "• /notify_weekly on|off — еженедельный отчёт (вс, 10:00)\n"
-        "• /notify_time HH:MM — время ежедневного отчёта (пока одно время для всех)\n\n"
-        "🔒 Подписка\n"
-        "• /today — список еды + итоги за сегодня\n"
-        "• /week — итоги за 7 дней\n"
-        "• /progress — прогресс за 7 дней относительно целей\n"
-        "• /streak — серия дней с логами\n"
-        "• /analyze_today — AI-анализ дня + советы\n"
-        "• /analyze_week — AI-анализ недели + фокус\n"
-    )
+    user = update.effective_user
+    lang = get_user_language(user.id) if user else "ru"
 
+    await msg.reply_text(t("help.text", lang), parse_mode="Markdown")
 
-# -------------------------
-# /today
-# -------------------------
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -555,7 +514,9 @@ async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         conn.commit()
 
-    await msg.reply_text(f"🗑 Удалила запись: {name}")
+    lang = get_user_language(user.id)
+
+    await msg.reply_text(t("log.deleted", lang, name=name))
 
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user

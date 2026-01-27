@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-import json
 import re
 from typing import Optional, Tuple
 
@@ -12,19 +11,82 @@ from telegram.ext import ContextTypes
 from src.ai import ai_estimate, ai_estimate_photo
 from src.aliases import apply_aliases_to_text
 from src.config import MEAL_ALIASES
-from src.db import db, now_iso, today_str
+from src.db import db, today_str
 from src.food_structure.food import Macros
 from src.i18n.lang import get_user_language
 from src.i18n.t import t
-from src.portions import suggest_portion
 from src.profile import build_profile_hint
 
 # Admin chat for "contact me" forwarding
 ADMIN_USER_ID = 452738438
 
+
+# -------------------------
+# Small helpers
+# -------------------------
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def fmt(x: float | None) -> str:
+    if x is None:
+        return "—"
+    return f"{float(x):.1f}"
+
+
+def net_carbs(carbs: float | None, fiber: float | None) -> float:
+    return max(0.0, float(carbs or 0.0) - float(fiber or 0.0))
+
+
+# Fallbacks for when translations are missing (t() will then return key)
+_UNIT_FALLBACK = {
+    "ru": {
+        "pcs": "шт",
+        "g": "г",
+        "ml": "мл",
+        "tbsp": "ст.л.",
+        "tsp": "ч.л.",
+        "serving": "порц.",
+        "kg": "кг",
+        "l": "л",
+    },
+    "pt": {
+        "pcs": "un",
+        "g": "g",
+        "ml": "ml",
+        "tbsp": "col. sopa",
+        "tsp": "col. chá",
+        "serving": "porção",
+        "kg": "kg",
+        "l": "l",
+    },
+}
+
+_MEAL_FALLBACK = {
+    "ru": {
+        "breakfast": "завтрак",
+        "lunch": "обед",
+        "dinner": "ужин",
+        "snack": "перекус",
+        "other": "другое",
+    },
+    "pt": {
+        "breakfast": "café da manhã",
+        "lunch": "almoço",
+        "dinner": "jantar",
+        "snack": "lanche",
+        "other": "outro",
+    },
+}
+
+
 def unit_label(lang: str, unit: str) -> str:
+    unit = (unit or "").strip() or "serving"
     val = t(f"unit.{unit}", lang)
-    return val if val != f"unit.{unit}" else unit
+    if val != f"unit.{unit}":
+        return val
+    return (_UNIT_FALLBACK.get(lang) or _UNIT_FALLBACK["ru"]).get(unit, unit)
 
 
 def meal_label(lang: str, meal: str) -> str:
@@ -32,29 +94,7 @@ def meal_label(lang: str, meal: str) -> str:
     val = t(f"meal.{meal}", lang)
     if val != f"meal.{meal}":
         return val
-    return meal_to_ru(meal)
-
-
-
-def fmt(x: float | None) -> str:
-    if x is None:
-        return "—"
-    return f"{x:.1f}"
-
-
-def net_carbs(carbs: float | None, fiber: float | None) -> float:
-    return max(0.0, float(carbs or 0.0) - float(fiber or 0.0))
-
-
-
-def meal_to_ru(meal: str) -> str:
-    return {
-        "breakfast": "завтрак",
-        "lunch": "обед",
-        "dinner": "ужин",
-        "snack": "перекус",
-        "other": "другое",
-    }.get(meal, meal)
+    return (_MEAL_FALLBACK.get(lang) or _MEAL_FALLBACK["ru"]).get(meal, meal)
 
 
 # -------------------------
@@ -92,9 +132,9 @@ def parse_meal_and_body(text: str) -> Tuple[str, str]:
     return meal, body
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
+# -------------------------
+# DB helpers
+# -------------------------
 
 def _f(x, default: float | None = None) -> float | None:
     if x is None:
@@ -104,10 +144,6 @@ def _f(x, default: float | None = None) -> float | None:
     except Exception:
         return default
 
-
-# -------------------------
-# DB helpers
-# -------------------------
 
 def insert_entry(
     user_id: int,
@@ -138,9 +174,9 @@ def insert_entry(
 
         calories = _f(getattr(macros, "calories", None), 0.0)
         protein = _f(getattr(macros, "protein", None), 0.0)
-        fat     = _f(getattr(macros, "fat", None), 0.0)
-        carbs   = _f(getattr(macros, "carbs", None), 0.0)
-        fiber   = _f(getattr(macros, "fiber", None), 0.0)
+        fat = _f(getattr(macros, "fat", None), 0.0)
+        carbs = _f(getattr(macros, "carbs", None), 0.0)
+        fiber = _f(getattr(macros, "fiber", None), 0.0)
 
     with db() as conn:
         cur = conn.cursor()
@@ -158,9 +194,18 @@ def insert_entry(
                %s)
             """,
             (
-                user_id, day, meal, raw_text,
-                item_name, qty, unit,
-                calories, protein, fat, carbs, fiber,
+                user_id,
+                day,
+                meal,
+                raw_text,
+                item_name,
+                qty,
+                unit,
+                calories,
+                protein,
+                fat,
+                carbs,
+                fiber,
                 _now_iso(),
             ),
         )
@@ -206,10 +251,10 @@ QTY_RE = re.compile(
 
 
 def parse_qty_unit(text: str) -> Optional[Tuple[float, str]]:
-    t = text.strip().lower()
-    if t in {"стандарт", "standard"}:
+    tt = text.strip().lower()
+    if tt in {"стандарт", "standard"}:
         return None
-    m = QTY_RE.search(t)
+    m = QTY_RE.search(tt)
     if not m:
         return None
     qty = float(m.group("qty").replace(",", "."))
@@ -230,8 +275,114 @@ def user_provided_qty(text: str) -> bool:
 
 
 # -------------------------
+# Core save + reply
+# -------------------------
+
+async def _save_items_and_reply(
+    update: Update,
+    uid: int,
+    day: str,
+    meal: str,
+    raw_text: str,
+    items: list,
+    confidence: float | None = None,
+    meta: dict | None = None,
+) -> None:
+    """Save each item as a separate entry, then reply with a localized summary."""
+    msg = update.effective_message
+    if not msg:
+        return
+
+    lang = get_user_language(uid)
+
+    # Write each item to DB
+    for it in items:
+        insert_entry(
+            user_id=uid,
+            day=day,
+            meal_type=meal,
+            text=raw_text,
+            macros=it,
+        )
+
+    # Human-friendly reply (localized)
+    lines = [t("log.added_header", lang, meal=meal_label(lang, meal))]
+    for it in items:
+        fib = float(getattr(it, "fiber", 0.0) or 0.0)
+        net = net_carbs(getattr(it, "carbs", 0.0), fib)
+        lines.append(
+            t(
+                "log.item_line",
+                lang,
+                name=getattr(it, "name", "") or "",
+                qty=f"{float(getattr(it, 'qty', 1.0) or 1.0):g}",
+                unit=unit_label(lang, getattr(it, "unit", "serving") or "serving"),
+                kcal=fmt(getattr(it, "calories", None)),
+                protein=fmt(getattr(it, "protein", None)),
+                fat=fmt(getattr(it, "fat", None)),
+                carbs=fmt(getattr(it, "carbs", None)),
+                fiber=fmt(fib),
+                net=fmt(net),
+            )
+        )
+
+    await msg.reply_text("\n".join(lines))
+
+
+async def save_items_and_reply(
+    update: Update,
+    uid: int,
+    day: str,
+    meal: str,
+    raw_text: str,
+    items: list,
+    confidence: float | None = None,
+    meta: dict | None = None,
+) -> None:
+    """Public alias for legacy/new flows."""
+    await _save_items_and_reply(
+        update=update,
+        uid=uid,
+        day=day,
+        meal=meal,
+        raw_text=raw_text,
+        items=items,
+        confidence=confidence,
+        meta=meta,
+    )
+
+
+# -------------------------
 # Food logging routing (MVP)
 # -------------------------
+
+async def _estimate_macros_from_telegram_photo(
+    bot,
+    file_id: str,
+    meal_hint: str,
+    profile_hint: dict,
+) -> tuple[list, float, dict]:
+    """Download Telegram photo and call ai_estimate_photo(image_bytes, ...)."""
+    tg_file = await bot.get_file(file_id)
+    data = await tg_file.download_as_bytearray()
+    image_bytes = bytes(data)
+
+    path = (tg_file.file_path or "").lower()
+    if path.endswith(".png"):
+        image_mime = "image/png"
+    elif path.endswith(".webp"):
+        image_mime = "image/webp"
+    else:
+        image_mime = "image/jpeg"
+
+    items, confidence, meta = ai_estimate_photo(
+        image_bytes=image_bytes,
+        image_mime=image_mime,
+        meal_hint=meal_hint,
+        profile_hint=profile_hint,
+    )
+    return items, confidence, meta
+
 
 async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
     user = update.effective_user
@@ -242,11 +393,11 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
     meal_type, body = parse_meal_and_body(text)
     day = today_str()
 
-    try:
-        replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
-        lang = get_user_language(user.id)
-        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
+    replaced_text, alias_notes = apply_aliases_to_text(user.id, text)
+    lang = get_user_language(user.id)
+    profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
 
+    try:
         items, confidence, meta = ai_estimate(
             text=replaced_text,
             meal_hint=meal_type,
@@ -262,7 +413,7 @@ async def _log_food_text(update: Update, context: ContextTypes.DEFAULT_TYPE, tex
         meta["assumptions"].extend(alias_notes)
 
     if not items:
-        await msg.reply_text("Не смогла распознать еду в сообщении. Напиши чуть подробнее.")
+        await msg.reply_text(t("log.cant_parse", lang))
         return
 
     await _save_items_and_reply(
@@ -310,11 +461,7 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             text=body,
             macros=None,
         )
-        await msg.reply_text(
-            "Фото записано ✅\n"
-            "Пока без КБЖУ (не смогла оценить по фото).\n"
-            "Добавь подпись текстом (что это и сколько), и я посчитаю точнее."
-        )
+        await msg.reply_text(t("photo.saved_no_macros", lang))
         return
 
     if not items:
@@ -325,11 +472,7 @@ async def _log_food_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             text=body,
             macros=None,
         )
-        await msg.reply_text(
-            "Фото записано ✅\n"
-            "Но по фото я не смогла уверенно распознать еду.\n"
-            "Добавь подпись текстом (что это и сколько), и я посчитаю."
-        )
+        await msg.reply_text(t("photo.saved_need_caption", lang))
         return
 
     meta = meta or {"assumptions": []}
@@ -393,10 +536,10 @@ async def on_new_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     msg = update.message
     if not msg or not msg.new_chat_members:
         return
-    await msg.reply_text(
-        "Привет! Я тут, чтобы вести дневник питания и считать КБЖУ.\n"
-        "Пиши что съела (например: 'завтрак: яйца и сыр') или пришли фото еды."
-    )
+
+    user = update.effective_user
+    lang = get_user_language(user.id) if user else "ru"
+    await msg.reply_text(t("welcome.text", lang))
 
 
 async def handle_log(
@@ -410,10 +553,12 @@ async def handle_log(
     Keeps the 'ask for qty' UX and writes entries one-per-item.
     """
     uid = u["user_id"]
-    d = today_str()
+    day = today_str()
     msg = update.effective_message
     if not msg:
         return
+
+    lang = get_user_language(uid)
 
     # 1) Awaiting qty from previous prompt
     if context.user_data.get("await_qty"):
@@ -424,7 +569,7 @@ async def handle_log(
             parsed = (awaited["suggest_qty"], awaited["suggest_unit"])
 
         if not parsed:
-            await msg.reply_text("Не вижу количество. Пример: `100 г` или `1 шт`.", parse_mode="Markdown")
+            await msg.reply_text(t("log.qty_missing", lang), parse_mode="Markdown")
             return
 
         qty, unit = parsed
@@ -444,7 +589,7 @@ async def handle_log(
 
         if not items:
             context.user_data.pop("await_qty", None)
-            await msg.reply_text("Не смогла восстановить запись. Попробуй ещё раз описать продукт.")
+            await msg.reply_text(t("log.restore_failed", lang))
             return
 
         items[0].qty = qty
@@ -452,10 +597,10 @@ async def handle_log(
 
         context.user_data.pop("await_qty", None)
 
-        await _save_items_and_reply(
+        await save_items_and_reply(
             update=update,
             uid=uid,
-            day=d,
+            day=day,
             meal=meal,
             raw_text=original_text,
             items=items,
@@ -464,9 +609,8 @@ async def handle_log(
         )
         return
 
-    # 2) Normal flow
+    # 2) Normal flow (legacy path)
     replaced_text, alias_notes = apply_aliases_to_text(uid, text)
-    lang = get_user_language(uid)
     profile_hint = build_profile_hint({"user_id": uid, "language": lang})
 
     try:
@@ -477,135 +621,20 @@ async def handle_log(
 
     meta = meta or {"assumptions": []}
     meta.setdefault("assumptions", [])
-
-    # ask qty if single item and user didn't specify
-    if not user_provided_qty(text) and items and len(items) == 1:
-        it = items[0]
-        suggestion = suggest_portion(it.name)  # (qty, unit) or None
-
-        if suggestion:
-            s_qty, s_unit = suggestion
-            await msg.reply_text(
-                f"Ты указала продукт без количества: {it.name}.\n"
-                f"Какое количество учитывать?\n\n"
-                f"Напиши число (например: 100 г)\n"
-                f"или ответь «стандарт» — я возьму {s_qty} {unit_label(lang, s_unit)}."
-            )
-        else:
-            s_qty, s_unit = 0.0, "g"
-            await msg.reply_text(
-                f"Ты указала продукт без количества: {it.name}.\n"
-                f"Напиши количество, например: 100 г или 1 шт."
-            )
-
-        context.user_data["await_qty"] = {
-            "meal": meal,
-            "text": text,
-            "item_name": it.name,
-            "suggest_qty": float(s_qty),
-            "suggest_unit": s_unit,
-            "replaced_text": replaced_text,
-            "profile_hint": profile_hint,
-            "confidence": confidence,
-            "meta": meta,
-        }
-        return
-
     if alias_notes:
         meta["assumptions"].extend(alias_notes)
 
     if not items:
-        await msg.reply_text("Я не знаю эту команду. Чтобы увидеть возможности, набери /help")
+        await msg.reply_text(t("log.cant_parse", lang))
         return
 
-    await _save_items_and_reply(
+    await save_items_and_reply(
         update=update,
         uid=uid,
-        day=d,
-        meal=meal,
+        day=day,
+        meal=_normalize_meal(meal),
         raw_text=text,
         items=items,
         confidence=confidence,
         meta=meta,
     )
-
-
-async def _save_items_and_reply(
-    update: Update,
-    uid: int,
-    day: str,
-    meal: str,
-    raw_text: str,
-    items: list,
-    confidence: Optional[float],
-    meta: dict,
-) -> None:
-    msg = update.effective_message
-    if not msg:
-        return
-
-    created_at = now_iso()
-    meta_json = json.dumps(meta or {}, ensure_ascii=False)
-
-    with db() as conn:
-        cur = conn.cursor()
-        for it in items:
-            cur.execute(
-                """
-                INSERT INTO entries(
-                    user_id, entry_date, meal, raw_text,
-                    item_name, qty, unit,
-                    calories, protein, fat, carbs, fiber,
-                    confidence, meta_json, created_at
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    uid, day, meal, raw_text,
-                    it.name, it.qty, it.unit,
-                    it.calories, it.protein, it.fat, it.carbs, it.fiber,
-                    confidence, meta_json, created_at,
-                ),
-            )
-        conn.commit()
-
-    lang = get_user_language(uid)
-    lines = [f"добавлено ({meal_to_ru(meal)}):"]
-    for it in items:
-        fib = float(it.fiber or 0.0)
-        net = net_carbs(it.carbs, fib)
-        lines.append(
-            f"- {it.name} ({it.qty} {unit_label(lang, it.unit)}): {fmt(it.calories)} ккал, "
-            f"белки {fmt(it.protein)} г, жиры {fmt(it.fat)} г, углеводы {fmt(it.carbs)} г "
-            f"(клетч. {fmt(fib)} г, чистые {fmt(net)} г)"
-        )
-
-    await msg.reply_text("\n".join(lines))
-
-
-async def _estimate_macros_from_telegram_photo(
-    bot,
-    file_id: str,
-    meal_hint: str,
-    profile_hint: dict,
-) -> tuple[list, float, dict]:
-    """Download Telegram photo and call ai_estimate_photo(image_bytes, ...)."""
-    tg_file = await bot.get_file(file_id)
-    data = await tg_file.download_as_bytearray()
-    image_bytes = bytes(data)
-
-    path = (tg_file.file_path or "").lower()
-    if path.endswith(".png"):
-        image_mime = "image/png"
-    elif path.endswith(".webp"):
-        image_mime = "image/webp"
-    else:
-        image_mime = "image/jpeg"
-
-    items, confidence, meta = ai_estimate_photo(
-        image_bytes=image_bytes,
-        image_mime=image_mime,
-        meal_hint=meal_hint,
-        profile_hint=profile_hint,
-    )
-    return items, confidence, meta

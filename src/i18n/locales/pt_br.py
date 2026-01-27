@@ -55,6 +55,7 @@ PT_BR = {
   "macro.protein": 'Proteínas',
   "macro.fat": 'Gorduras',
   "macro.carbs": 'Carboidratos',
+  "log.deleted": '🗑 Registro removido: {name}',
   "unknown_food_not_saved": 'Não entendi o que você adicionou, então não salvei nada.\nEscreva assim: "lanche: 2 ovos e iogurte 150 g".',
 
 }
