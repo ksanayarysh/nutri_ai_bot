@@ -23,11 +23,17 @@ from src.profile import build_profile_hint
 ADMIN_USER_ID = 452738438
 
 def unit_label(lang: str, unit: str) -> str:
-    # Prefer i18n keys; fallback to legacy dicts.
     val = t(f"unit.{unit}", lang)
-    if val != f"unit.{unit}":
+    return val if val != f"unit.{unit}" else unit
+
+
+def meal_label(lang: str, meal: str) -> str:
+    meal = (meal or "other").lower().strip()
+    val = t(f"meal.{meal}", lang)
+    if val != f"meal.{meal}":
         return val
-    return UNIT_LABELS_BY_LANG.get(lang, UNIT_LABELS_BY_LANG["ru"]).get(unit, unit)
+    return meal_to_ru(meal)
+
 
 
 def fmt(x: float | None) -> str:
@@ -40,80 +46,6 @@ def net_carbs(carbs: float | None, fiber: float | None) -> float:
     return max(0.0, float(carbs or 0.0) - float(fiber or 0.0))
 
 
-# --- i18n minimal for /today ---
-
-UNIT_LABELS_BY_LANG = {
-    "ru": {
-        "pcs": "шт",
-        "g": "г",
-        "ml": "мл",
-        "tbsp": "ст.л.",
-        "tsp": "ч.л.",
-        "serving": "порц.",
-    },
-    "pt": {
-        "pcs": "un",
-        "g": "g",
-        "ml": "ml",
-        "tbsp": "col. sopa",
-        "tsp": "col. chá",
-        "serving": "porção",
-    },
-}
-
-MEAL_LABELS = {
-    "ru": {
-        "breakfast": "завтрак",
-        "lunch": "обед",
-        "dinner": "ужин",
-        "snack": "перекус",
-        "other": "другое",
-    },
-    "pt": {
-        "breakfast": "café da manhã",
-        "lunch": "almoço",
-        "dinner": "jantar",
-        "snack": "lanche",
-        "other": "outro",
-    },
-}
-
-TODAY_TEXT = {
-    "ru": {
-        "paywall": "⏳ Эта функция доступна по подписке.\nИспользуй /pay",
-        "empty": "📭 За сегодня пока ничего не записано.",
-        "title": "📋 Сегодня ты съела:",
-        "totals": "📊 Итоги за сегодня:",
-        "kcal": "Ккал",
-        "protein": "Белки",
-        "fat": "Жиры",
-        "carbs": "Углеводы",
-        "net_carbs": "Чистые углеводы",
-        "grams": "г",
-    },
-    "pt": {
-        "paywall": "⏳ Esta função está disponível por assinatura.\nUse /pay",
-        "empty": "📭 Ainda não há registros de hoje.",
-        "title": "📋 Hoje você comeu:",
-        "totals": "📊 Totais de hoje:",
-        "kcal": "Kcal",
-        "protein": "Proteínas",
-        "fat": "Gorduras",
-        "carbs": "Carboidratos",
-        "net_carbs": "Carboidratos líquidos",
-        "grams": "g",
-    },
-}
-
-def _unit_label(lang: str, unit: str) -> str:
-    d = UNIT_LABELS_BY_LANG.get(lang) or UNIT_LABELS_BY_LANG["ru"]
-    return d.get(unit, unit)
-
-def _meal_label(lang: str, meal: str) -> str:
-    meal = (meal or "other").lower().strip()
-    d = MEAL_LABELS.get(lang) or MEAL_LABELS["ru"]
-    return d.get(meal, meal)
-
 
 def meal_to_ru(meal: str) -> str:
     return {
@@ -121,7 +53,7 @@ def meal_to_ru(meal: str) -> str:
         "lunch": "обед",
         "dinner": "ужин",
         "snack": "перекус",
-        "other": "перекус",
+        "other": "другое",
     }.get(meal, meal)
 
 
@@ -638,28 +570,14 @@ async def _save_items_and_reply(
         conn.commit()
 
     lang = get_user_language(uid)
-    meal_lbl = t(f"meal.{meal}", lang)
-    if meal_lbl == f"meal.{meal}":
-        # fallback to existing helper if key is missing
-        meal_lbl = meal_to_ru(meal)
-    lines = [t("log.added_header", lang, meal=meal_lbl)]
+    lines = [f"добавлено ({meal_to_ru(meal)}):"]
     for it in items:
         fib = float(it.fiber or 0.0)
         net = net_carbs(it.carbs, fib)
         lines.append(
-            t(
-                "log.item_line",
-                lang,
-                name=it.name,
-                qty=it.qty,
-                unit=unit_label(lang, it.unit),
-                kcal=fmt(it.calories),
-                protein=fmt(it.protein),
-                fat=fmt(it.fat),
-                carbs=fmt(it.carbs),
-                fiber=fmt(fib),
-                net=fmt(net),
-            )
+            f"- {it.name} ({it.qty} {unit_label(lang, it.unit)}): {fmt(it.calories)} ккал, "
+            f"белки {fmt(it.protein)} г, жиры {fmt(it.fat)} г, углеводы {fmt(it.carbs)} г "
+            f"(клетч. {fmt(fib)} г, чистые {fmt(net)} г)"
         )
 
     await msg.reply_text("\n".join(lines))

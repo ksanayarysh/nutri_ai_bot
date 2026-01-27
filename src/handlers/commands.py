@@ -6,9 +6,7 @@ from telegram.ext import ContextTypes
 
 from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.db import ensure_user, get_targets
-from src.handlers.messages import _meal_label, TODAY_TEXT, _unit_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
-from src.i18n.t import t
 from src.profile import build_profile_hint
 from src.config import ADMIN_IDS
 
@@ -45,9 +43,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     ensure_user(user.id, user.username, user.first_name)
 
-    lang = get_user_language(user.id)
     await update.message.reply_text(
-        t("start.welcome", lang),
+        "Привет! 👋\n\n"
+        "Я нутри-бот — помогаю вести дневник питания, "
+        "считать КБЖУ и видеть закономерности.\n\n"
+        "Просто напиши, что ты съела, например:\n"
+        "`завтрак: яйца и сыр`\n"
+        "или пришли фото еды 📸\n\n"
+        "Команды:\n"
+        "/today — итоги дня\n"
+        "/week — итоги недели\n"
+        "/pay — подписка\n"
+        "/help — все, что я умею \n",
         parse_mode="Markdown",
     )
 
@@ -61,10 +68,35 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not msg:
         return
 
-    user = update.effective_user
-    lang = get_user_language(user.id) if user else "ru"
-
-    await msg.reply_text(t("help.text", lang))
+    await msg.reply_text(
+        "📌 Команды NutriHelper:\n\n"
+        "🆓 Базовое (бесплатно)\n"
+        "• /start — старт\n"
+        "• /help — справка\n"
+        "• /pay — подписка/оплата\n"
+        "• /myid — твой Telegram ID (для идентификации платежа)\n"
+        "• /contact — написать администратору\n"
+        "• /cancel — отменить режим /contact\n\n"
+        "📝 Дневник\n"
+        "• просто напиши: `завтрак: яйца и сыр`\n"
+        "• /del <n> — удалить запись #n из сегодняшнего списка (см. /today)\n"
+        "• /edit <n> <новый текст> — заменить запись #n (пример: /edit 2 огурец 200 г)\n\n"
+        "🎯 Цели (targets)\n"
+        "• /set_targets <kcal> <protein> <fat> <carbs> <net_carbs> [mode]\n"
+        "  пример: /set_targets 1400 90 70 30 20 keto\n"
+        "• /goals — показать текущие цели\n\n"
+        "🔔 Уведомления\n"
+        "• /notify on|off — ежедневный авто-отчёт (в 21:00)\n"
+        "• /notify_weekly on|off — еженедельный отчёт (вс, 10:00)\n"
+        "• /notify_time HH:MM — время ежедневного отчёта (пока одно время для всех)\n\n"
+        "🔒 Подписка\n"
+        "• /today — список еды + итоги за сегодня\n"
+        "• /week — итоги за 7 дней\n"
+        "• /progress — прогресс за 7 дней относительно целей\n"
+        "• /streak — серия дней с логами\n"
+        "• /analyze_today — AI-анализ дня + советы\n"
+        "• /analyze_week — AI-анализ недели + фокус\n"
+    )
 
 
 # -------------------------
@@ -79,7 +111,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = get_user_language(user.id)  # <-- важно
 
     if not is_subscribed_user(user.id):
-        await update.message.reply_text((TODAY_TEXT.get(lang) or TODAY_TEXT["ru"])["paywall"])
+        await update.message.reply_text(t("today.paywall", lang))
         return
 
     day = today_str()
@@ -88,7 +120,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cur = conn.cursor()
 
         cur.execute(
-            """
+            '''
             SELECT
               COALESCE(meal, 'other')      AS meal,
               COALESCE(item_name, '')      AS item_name,
@@ -102,13 +134,13 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             FROM entries
             WHERE user_id = %s AND entry_date = %s
             ORDER BY meal, id
-            """,
+            ''',
             (user.id, day),
         )
         rows = cur.fetchall()
 
         cur.execute(
-            """
+            '''
             SELECT
               COALESCE(SUM(calories), 0),
               COALESCE(SUM(protein), 0),
@@ -117,43 +149,53 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s AND entry_date = %s
-            """,
+            ''',
             (user.id, day),
         )
         calories, protein, fat, carbs, fiber = cur.fetchone()
 
-    txt = TODAY_TEXT.get(lang) or TODAY_TEXT["ru"]
-
     if not rows:
-        await update.message.reply_text(txt["empty"])
+        await update.message.reply_text(t("today.empty", lang))
         return
 
     meals: dict[str, list[str]] = {}
     i = 1
     for meal, name, qty, unit, cal, p, f, c, fi in rows:
         meals.setdefault(meal or "other", []).append(
-            f"•{i} {name} — {qty:g} {_unit_label(lang, unit)} "
-            f"({cal:.0f} {txt['kcal'].lower() if lang == 'pt' else 'ккал'}, "
-            f"{'P' if lang=='pt' else 'Б'} {p:.1f}, "
-            f"{'G' if lang=='pt' else 'Ж'} {f:.1f}, "
-            f"{'C' if lang=='pt' else 'У'} {c:.1f})"
+            t(
+                "today.item_line",
+                lang,
+                i=i,
+                name=name,
+                qty=f"{float(qty):g}",
+                unit=unit_label(lang, unit),
+                cal=f"{float(cal):.0f}",
+                p=f"{float(p):.1f}",
+                f=f"{float(f):.1f}",
+                c=f"{float(c):.1f}",
+            )
         )
         i += 1
 
-    lines = [txt["title"]]
+    lines = [t("today.title", lang)]
     for meal, items in meals.items():
-        lines.append(f"\n🍽 {_meal_label(lang, meal)}")
+        lines.append(t("today.meal_header", lang, meal=meal_label(lang, meal)))
         lines.extend(items)
 
-    net_carbs = max(carbs - fiber, 0)
+    net = max(float(carbs or 0.0) - float(fiber or 0.0), 0.0)
 
     lines.append(
-        "\n" + txt["totals"] + "\n"
-        f"{txt['kcal']}: {calories:.0f}\n"
-        f"{txt['protein']}: {protein:.1f} {txt['grams']}\n"
-        f"{txt['fat']}: {fat:.1f} {txt['grams']}\n"
-        f"{txt['carbs']}: {carbs:.1f} {txt['grams']}\n"
-        f"{txt['net_carbs']}: {net_carbs:.1f} {txt['grams']}"
+        t("today.totals_title", lang)
+        + "\n"
+        + t(
+            "today.totals_lines",
+            lang,
+            kcal=f"{float(calories):.0f}",
+            protein=f"{float(protein):.1f}",
+            fat=f"{float(fat):.1f}",
+            carbs=f"{float(carbs):.1f}",
+            net=f"{float(net):.1f}",
+        )
     )
 
     await update.message.reply_text("\n".join(lines))
@@ -170,7 +212,8 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if not is_subscribed_user(user.id):
         await update.message.reply_text(
-            t("paywall.subscription", get_user_language(user.id))
+            "⏳ Эта функция доступна по подписке.\n"
+            "Используй /pay"
         )
         return
 
@@ -334,7 +377,7 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     if not is_subscribed_user(user.id):
-        await update.message.reply_text(t("paywall.subscription", get_user_language(user.id)))
+        await update.message.reply_text("⏳ Анализ доступен по подписке. Используй /pay")
         return
 
     days = 7
@@ -605,7 +648,7 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if not is_subscribed_user(user.id):
-        await msg.reply_text(t("paywall.subscription", get_user_language(user.id)))
+        await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
         return
 
     day = today_str()
@@ -776,10 +819,10 @@ async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
-    lang = get_user_language(user.id)
-
     await update.message.reply_text(
-        t("myid.text", lang, user_id=user.id),
+        f"🆔 Твой ID:\n\n"
+        f"`{user.id}`\n\n"
+        f"Используй этот ID при оплате или напиши его администратору.",
         parse_mode="Markdown"
     )
 
@@ -790,17 +833,15 @@ async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     context.user_data["contact_mode"] = True
 
-    lang = get_user_language(update.effective_user.id) if update.effective_user else "ru"
-
     await update.message.reply_text(
-        t("contact.enter", lang)
+        "📩 Напиши сообщение, и я перешлю его администратору.\n"
+        "Чтобы отменить — напиши /cancel"
     )
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("contact_mode", None)
     if update.message:
-        lang = get_user_language(update.effective_user.id) if update.effective_user else "ru"
-        await update.message.reply_text(t("contact.cancelled", lang))
+        await update.message.reply_text("❌ Отменено.")
 
 async def cmd_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -811,16 +852,18 @@ async def cmd_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     targets = get_targets(user.id)
 
     if not targets:
-        lang = get_user_language(user.id)
-
         await msg.reply_text(
-            t("goals.none", lang),
+            "🎯 Цели не заданы.\n\n"
+            "Задай их командой:\n"
+            "`/set_targets kcal protein fat carbs net_carbs [mode]`\n\n"
+            "Пример:\n"
+            "`/set_targets 1400 90 70 30 20 keto`",
             parse_mode="Markdown",
         )
         return
 
     lines = [
-        t("goals.title", get_user_language(user.id)),
+        "🎯 Твои цели:",
         f"Ккал: {targets.get('calories')}",
         f"Белки: {targets.get('protein')} г",
         f"Жиры: {targets.get('fat')} г",
@@ -844,17 +887,17 @@ async def cmd_notify(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     if not context.args:
-        await msg.reply_text(t("notify.format", get_user_language(user.id)))
+        await msg.reply_text("Формат: /notify on|off")
         return
 
     arg = context.args[0].strip().lower()
     if arg not in {"on", "off"}:
-        await msg.reply_text(t("notify.format", get_user_language(user.id)))
+        await msg.reply_text("Формат: /notify on|off")
         return
 
     ensure_notify_settings(user.id)
     set_daily_enabled(user.id, enabled=(arg == "on"))
-    await msg.reply_text(t("notify.done_daily", get_user_language(user.id), state=t("notify.state_on", get_user_language(user.id)) if arg=="on" else t("notify.state_off", get_user_language(user.id))))
+    await msg.reply_text("Готово ✅ Ежедневные уведомления: " + ("включены" if arg == "on" else "выключены"))
 
 
 # -------------------------
@@ -868,17 +911,17 @@ async def cmd_notify_weekly(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     if not context.args:
-        await msg.reply_text(t("notify_weekly.format", get_user_language(user.id)))
+        await msg.reply_text("Формат: /notify_weekly on|off")
         return
 
     arg = context.args[0].strip().lower()
     if arg not in {"on", "off"}:
-        await msg.reply_text(t("notify_weekly.format", get_user_language(user.id)))
+        await msg.reply_text("Формат: /notify_weekly on|off")
         return
 
     ensure_notify_settings(user.id)
     set_weekly_enabled(user.id, enabled=(arg == "on"))
-    await msg.reply_text(t("notify.done_weekly", get_user_language(user.id), state=t("notify.state_on", get_user_language(user.id)) if arg=="on" else t("notify.state_off", get_user_language(user.id))))
+    await msg.reply_text("Готово ✅ Еженедельные уведомления: " + ("включены" if arg == "on" else "выключены"))
 
 
 # -------------------------
@@ -892,7 +935,7 @@ async def cmd_notify_time(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     if not context.args:
-        await msg.reply_text(t("notify_time.format", get_user_language(user.id)))
+        await msg.reply_text("Формат: /notify_time 21:00")
         return
 
     hhmm = context.args[0].strip()
@@ -901,10 +944,10 @@ async def cmd_notify_time(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     try:
         set_daily_time_hhmm(user.id, hhmm)
     except ValueError:
-        await msg.reply_text(t("notify_time.bad", get_user_language(user.id)))
+        await msg.reply_text("Неверный формат времени. Пример: 21:00")
         return
 
-    await msg.reply_text(t("notify_time.ok", get_user_language(user.id), hhmm=hhmm))
+    await msg.reply_text(f"Ок ✅ Буду присылать ежедневный отчёт в {hhmm} (по твоему часовому поясу).")
 
 
 # -------------------------
@@ -918,7 +961,7 @@ async def cmd_streak(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     if not is_subscribed_user(user.id):
-        await msg.reply_text(t("paywall.subscription", get_user_language(user.id)))
+        await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
         return
 
     day0 = today_str()
@@ -976,7 +1019,7 @@ async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     if not is_subscribed_user(user.id):
-        await msg.reply_text(t("paywall.subscription", get_user_language(user.id)))
+        await msg.reply_text("⏳ Эта функция доступна по подписке.\nИспользуй /pay")
         return
 
     targets = get_targets(user.id)
@@ -1193,9 +1236,19 @@ async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         current = get_user_language(user.id)
 
         if current == "pt":
-            await msg.reply_text(t("lang.current_pt", "pt"))
+            await msg.reply_text(
+                "Idioma atual: PT-BR 🇧🇷\n\n"
+                "Para trocar:\n"
+                "• /lang ru (Русский)\n"
+                "• /lang pt (Português)"
+            )
         else:
-            await msg.reply_text(t("lang.current_ru", "ru"))
+            await msg.reply_text(
+                "Текущий язык: RU 🇷🇺\n\n"
+                "Чтобы сменить:\n"
+                "• /lang pt (Português)\n"
+                "• /lang ru (Русский)"
+            )
         return
 
     requested = _normalize_lang(args[0])
@@ -1204,15 +1257,15 @@ async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # мягко объясняем, что ты опять написала ерунду
         current = get_user_language(user.id)
         if current == "pt":
-            await msg.reply_text(t("lang.invalid_pt", get_user_language(user.id)))
+            await msg.reply_text("Idioma inválido. Use /lang pt ou /lang ru.")
         else:
-            await msg.reply_text(t("lang.invalid_ru", get_user_language(user.id)))
+            await msg.reply_text("Неверный язык. Используй /lang pt или /lang ru.")
         return
 
     set_user_language(user.id, requested)
 
     # подтверждение на новом языке
     if requested == "pt":
-        await msg.reply_text(t("lang.set_pt", "pt"))
+        await msg.reply_text("Pronto! Agora o idioma é PT-BR 🇧🇷")
     else:
-        await msg.reply_text(t("lang.set_ru", "ru"))
+        await msg.reply_text("Готово! Теперь язык — русский 🇷🇺")
