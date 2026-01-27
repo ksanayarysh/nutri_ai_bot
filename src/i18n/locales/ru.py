@@ -49,4 +49,10 @@ RU = {
   "macro.carbs": "углеводы",
   "macro.fiber": "клетчатка",
   "macro.net": "чистые",
+  "week.paywall": '⏳ Эта функция доступна по подписке.\nИспользуй /pay',
+  "week.empty": '📭 За последние 7 дней записей нет.',
+  "week.title": '📈 Итоги за 7 дней:',
+  "week.days": 'Дней с логами: {days}',
+  "week.line": '{label}: {total}, среднее {avg}',
+  "week.net": 'Чистые углеводы',
 }

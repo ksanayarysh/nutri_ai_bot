@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 from src.ai import ai_estimate, ai_daily_analysis_ru
 from src.db import ensure_user, get_targets
-from src.handlers.messages import meal_label, unit_label
+from src.handlers.messages import unit_label, meal_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
 from src.i18n.t import t
 from src.profile import build_profile_hint
@@ -122,7 +122,7 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         cur = conn.cursor()
 
         cur.execute(
-            '''
+            """
             SELECT
               COALESCE(meal, 'other')      AS meal,
               COALESCE(item_name, '')      AS item_name,
@@ -136,13 +136,13 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             FROM entries
             WHERE user_id = %s AND entry_date = %s
             ORDER BY meal, id
-            ''',
+            """,
             (user.id, day),
         )
         rows = cur.fetchall()
 
         cur.execute(
-            '''
+            """
             SELECT
               COALESCE(SUM(calories), 0),
               COALESCE(SUM(protein), 0),
@@ -151,11 +151,12 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
               COALESCE(SUM(fiber), 0)
             FROM entries
             WHERE user_id = %s AND entry_date = %s
-            ''',
+            """,
             (user.id, day),
         )
         calories, protein, fat, carbs, fiber = cur.fetchone()
 
+    # вместо txt = TODAY_TEXT.get(...) ...
     if not rows:
         await update.message.reply_text(t("today.empty", lang))
         return
@@ -212,43 +213,65 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not update.message:
         return
 
+    lang = get_user_language(user.id)
+
     if not is_subscribed_user(user.id):
-        await update.message.reply_text(
-            "⏳ Эта функция доступна по подписке.\n"
-            "Используй /pay"
-        )
+        await update.message.reply_text(t("week.paywall", lang))
         return
+
+    # last 7 days, including today
+    now = datetime.now(TZ)
+    days_list = [(now - timedelta(days=i)).date().isoformat() for i in range(7)]
 
     with db() as conn:
         cur = conn.cursor()
         cur.execute(
-            """
+            '''
             SELECT
-              COUNT(DISTINCT entry_date),
-              COALESCE(SUM(calories), 0),
-              COALESCE(SUM(protein), 0),
-              COALESCE(SUM(fat), 0),
-              COALESCE(SUM(carbs), 0),
-              COALESCE(SUM(fiber), 0)
+              COUNT(DISTINCT entry_date) AS days_with_logs,
+              COALESCE(SUM(calories), 0) AS calories,
+              COALESCE(SUM(protein), 0)  AS protein,
+              COALESCE(SUM(fat), 0)      AS fat,
+              COALESCE(SUM(carbs), 0)    AS carbs,
+              COALESCE(SUM(fiber), 0)    AS fiber
             FROM entries
-            WHERE user_id = %s
-              AND entry_date::date >= CURRENT_DATE - INTERVAL '7 days'
-            """,
-            (user.id,),
+            WHERE user_id = %s AND entry_date = ANY(%s)
+            ''',
+            (user.id, days_list),
         )
-        days, calories, protein, fat, carbs, fiber = cur.fetchone()
+        days_with_logs, calories, protein, fat, carbs, fiber = cur.fetchone()
 
-    net_carbs = max(float(carbs or 0) - float(fiber or 0), 0.0)
+    days = int(days_with_logs or 0)
+    if days <= 0:
+        await update.message.reply_text(t("week.empty", lang))
+        return
 
-    await update.message.reply_text(
-        f"📈 Итоги за 7 дней:\n\n"
-        f"Дней с логами: {days}\n\n"
-        f"Ккал: {calories:.0f}, среднее {calories / days:.1f}\n"
-        f"Белки: {protein:.1f}г, среднее {protein / days:.1f}г\n"
-        f"Жиры: {fat:.1f}г, среднее {fat / days:.1f}г\n"
-        f"Углеводы: {carbs:.1f}г, среднее {carbs / days:.1f}г\n"
-        f"Чистые углеводы: {net_carbs:.1f}г, среднее {net_carbs / days:.1f}"
-    )
+    net = max(float(carbs or 0.0) - float(fiber or 0.0), 0.0)
+
+    def _line(label_key: str, total: str, avg: str) -> str:
+        return t("week.line", lang, label=t(label_key, lang), total=total, avg=avg)
+
+    lines = [
+        t("week.title", lang),
+        "",
+        t("week.days", lang, days=days),
+        "",
+        _line("macro.kcal", f"{float(calories):.0f}", f"{float(calories)/days:.1f}"),
+        _line("macro.protein", f"{float(protein):.1f} g", f"{float(protein)/days:.1f} g"),
+        _line("macro.fat", f"{float(fat):.1f} g", f"{float(fat)/days:.1f} g"),
+        _line("macro.carbs", f"{float(carbs):.1f} g", f"{float(carbs)/days:.1f} g"),
+        t(
+            "week.line",
+            lang,
+            label=t("week.net", lang),
+            total=f"{float(net):.1f} g",
+            avg=f"{float(net)/days:.1f} g",
+        ),
+    ]
+
+    await update.message.reply_text("\n".join(lines))
+
+
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
