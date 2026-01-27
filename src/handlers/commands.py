@@ -61,7 +61,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     lang = get_user_language(user.id) if user else "ru"
 
-    await msg.reply_text(t("help.text", lang), parse_mode="Markdown")
+    await msg.reply_text(t("help.text", lang))
 
 
 async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
