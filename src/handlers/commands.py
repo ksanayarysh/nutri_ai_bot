@@ -212,15 +212,15 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     # базовый текстовый summary (читаемый формат, построчно)
     lines = []
-    lines.append(t("week.title", lang))
-    lines.append(f"📅 Дней с записями: {days}")
-    lines.append("")
-    lines.append(f"🔥 Ккал: {float(calories):.0f} (ср {float(calories)/days:.0f}/день)")
-    lines.append(f"🥩 Белки: {float(protein):.1f} г (ср {float(protein)/days:.1f}/день)")
-    lines.append(f"🧈 Жиры: {float(fat):.1f} г (ср {float(fat)/days:.1f}/день)")
-    lines.append(f"🥔 Углеводы: {float(carbs):.1f} г (ср {float(carbs)/days:.1f}/день)")
+    lines.append(t("week.title\n", lang))
+    lines.append(f"📅 Дней с записями: {days}\n")
+    lines.append("\n")
+    lines.append(f"🔥 Ккал: {float(calories):.0f} (ср {float(calories)/days:.0f}/день)\n")
+    lines.append(f"🥩 Белки: {float(protein):.1f} г (ср {float(protein)/days:.1f}/день)\n")
+    lines.append(f"🧈 Жиры: {float(fat):.1f} г (ср {float(fat)/days:.1f}/день)\n")
+    lines.append(f"🥔 Углеводы: {float(carbs):.1f} г (ср {float(carbs)/days:.1f}/день)\n")
     lines.append(f"🍬 Чистые: {float(net):.1f} г (ср {float(net)/days:.1f}/день)")
-    lines.append(f"🥬 Клетчатка: {float(fiber):.1f} г (ср {float(fiber)/days:.1f}/день)")
+    lines.append(f"🥬 Клетчатка: {float(fiber):.1f} г (ср {float(fiber)/days:.1f}/день)\n")
 
     # --- AI-недельный анализ
     # (как дневной, с микроэлементами) ---
@@ -276,13 +276,13 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         analysis = None
 
     if isinstance(analysis, dict):
-        lines.append("")
-        lines.append(analysis.get("headline", "🗓️ Анализ недели"))
-        lines.append("")
+        lines.append("\n")
+        lines.append(analysis.get("headline", "🗓️ Анализ недели\n"))
+        lines.append("\n")
         micro = analysis.get("micronutrients")
         if isinstance(micro, dict) and micro:
             lines.append("")
-            lines.append("🧬 Микроэлементы:")
+            lines.append("🧬 Микроэлементы:\n")
             order = [
                 ("iron", "🩸 Железо"),
                 ("zinc", "🧷 Цинк"),
@@ -296,14 +296,14 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             ]
             for k, label in order:
                 v = micro.get(k) or "—"
-                lines.append(f"{label}: {v}")
+                lines.append(f"{label}: {v}\n")
 
         for key, title in [("good", "✅ Что хорошо:"), ("improve", "🛠 Что улучшить:"), ("plan", "📌 План:"), ("warnings", "⚠️ Предупреждения:")]:
             arr = analysis.get(key) or []
             if arr:
-                lines.append("")
-                lines.append(title)
-                lines.extend([f"• {x}" for x in arr])
+                lines.append("\n")
+                lines.append(f"{title}\n")
+                lines.extend([f"• {x}\n" for x in arr])
 
     await update.message.reply_text("".join(lines))
 
