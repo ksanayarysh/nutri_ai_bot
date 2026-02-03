@@ -430,7 +430,6 @@ def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: l
 - Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
 - Учитывай ингибиторы и синергисты.
 - Пиши кратко и практично.
-- Не добавляй эмодзи в начале строки! это важно
 
 Профиль:
 {json.dumps(profile_hint, ensure_ascii=False)}
@@ -449,6 +448,59 @@ def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: l
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_schema", "json_schema": _analysis_json_schema_ru()},
         temperature=0.4
+    )
+    return json.loads(resp.choices[0].message.content)
+
+
+def _weekly_analysis_json_schema_ru():
+    # Same structure as daily, different name for clarity in logs
+    js = _analysis_json_schema_ru()
+    js["name"] = "weekly_analysis_ru"
+    return js
+
+
+def ai_weekly_analysis_ru(*, profile_hint: dict, start_date: str, end_date: str, days_logged: int, totals: dict, items: list[dict]) -> dict:
+    """
+    totals must already include computed numbers. Do NOT recompute macros.
+    Suggested totals shape:
+      {
+        "total": {"calories":..,"protein":..,"fat":..,"carbs":..,"fiber":..,"net_carbs":..},
+        "avg":   {"calories":..,"protein":..,"fat":..,"carbs":..,"fiber":..,"net_carbs":..},
+        "targets": {...}  # optional
+      }
+    items: list of eaten items for the period (can include "date" and "meal").
+    """
+    # Keep the prompt short-ish: the schema forces micronutrients block to exist.
+    prompt = f"""
+Ты — нутри-ассистент и анализируешь питание за период (неделя/несколько дней).
+
+ВАЖНО:
+- НЕ считай калории и БЖУ: используй готовые totals.
+- Сделай выводы по регулярности: где провалы по белку/клетчатке/овощам, где избыток ультра-обработанного.
+- Дай статус по каждому микроэлементу (обязательно все 9):
+  железо, цинк, магний, йод, селен, витамин B12, кальций, антиоксиданты, омега‑3.
+- Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
+- Учитывай ингибиторы и синергисты (например: витамин C↔железо; кальций↔железо; фитаты↔цинк и т.д.), но без лекций.
+- Пиши практично: что сделать на следующей неделе, 3–6 пунктов.
+- Верни JSON строго по схеме.
+
+Профиль:
+{json.dumps(profile_hint, ensure_ascii=False)}
+
+Период: {start_date} — {end_date} (дней с логами: {days_logged})
+
+Еда (список):
+{json.dumps(items, ensure_ascii=False)}
+
+Итоги и средние (включая targets, если есть):
+{json.dumps(totals, ensure_ascii=False)}
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": _weekly_analysis_json_schema_ru()},
+        temperature=0.4,
     )
     return json.loads(resp.choices[0].message.content)
 
