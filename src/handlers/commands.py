@@ -1263,7 +1263,7 @@ async def cmd_case(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user or not msg:
         return
 
-    if not is_subscribed(user.id):
+    if not is_subscribed_user(user.id):
         await msg.reply_text(
             "🔒 Команда /case доступна только по подписке.\n"
             "Оформить доступ: /pay"
