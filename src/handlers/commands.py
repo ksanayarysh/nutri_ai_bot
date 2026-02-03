@@ -4,7 +4,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.ai import ai_estimate, ai_daily_analysis_ru, ai_weekly_analysis_ru, ai_case_plan_ru
+from src.ai import ai_estimate, ai_daily_analysis_ru, ai_case_plan_ru, ai_weekly_analysis_ru
 from src.db import ensure_user, get_targets
 from src.handlers.messages import unit_label, meal_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
@@ -22,6 +22,7 @@ from src.jobs.notifications import (
     set_weekly_enabled,
     set_daily_time_hhmm,
 )
+
 
 UNIT_LABELS = {
     "pcs": "шт",
@@ -180,8 +181,6 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # last 7 days, including today
     now = datetime.now(TZ)
     days_list = [(now - timedelta(days=i)).date().isoformat() for i in range(7)]
-    start_date = days_list[-1]
-    end_date = days_list[0]
 
     with db() as conn:
         cur = conn.cursor()
@@ -201,181 +200,116 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         days_with_logs, calories, protein, fat, carbs, fiber = cur.fetchone()
 
-        # pull all items (for AI context)
-        cur.execute(
-            '''
-            SELECT
-              entry_date,
-              COALESCE(meal, 'other') AS meal,
-              COALESCE(item_name, '') AS item_name,
-              COALESCE(qty, 1)        AS qty,
-              COALESCE(unit, 'serving') AS unit,
-              COALESCE(calories, 0)   AS calories,
-              COALESCE(protein, 0)    AS protein,
-              COALESCE(fat, 0)        AS fat,
-              COALESCE(carbs, 0)      AS carbs,
-              COALESCE(fiber, 0)      AS fiber
-            FROM entries
-            WHERE user_id = %s AND entry_date = ANY(%s)
-              AND item_name IS NOT NULL AND item_name <> ''
-            ORDER BY entry_date, id
-            ''',
-            (user.id, days_list),
-        )
-        rows = cur.fetchall()
-
     days = int(days_with_logs or 0)
     if days <= 0:
         await update.message.reply_text(t("week.empty", lang))
         return
 
-    calories = float(calories or 0)
-    protein = float(protein or 0)
-    fat = float(fat or 0)
-    carbs = float(carbs or 0)
-    fiber = float(fiber or 0)
-    net = max(carbs - fiber, 0.0)
+    net = max(float(carbs or 0.0) - float(fiber or 0.0), 0.0)
 
-    avg = {
-        "calories": calories / days,
-        "protein": protein / days,
-        "fat": fat / days,
-        "carbs": carbs / days,
-        "fiber": fiber / days,
-        "net_carbs": net / days,
-    }
-    total = {
-        "calories": calories,
-        "protein": protein,
-        "fat": fat,
-        "carbs": carbs,
-        "fiber": fiber,
-        "net_carbs": net,
-    }
+    def _line(label_key: str, total: str, avg: str) -> str:
+        return t("week.line", lang, label=t(label_key, lang), total=total, avg=avg)
 
-    items_for_ai = []
-    # safety: don't blow the prompt up; 80 items is plenty for patterns
-    for (d, meal, name, qty, unit, cal, p, f, c, fi) in rows[:80]:
-        items_for_ai.append({
-            "date": d,
-            "meal": meal,
-            "name": name,
-            "qty": float(qty) if qty is not None else 1.0,
-            "unit": unit,
-            "calories": float(cal or 0),
-            "protein": float(p or 0),
-            "fat": float(f or 0),
-            "carbs": float(c or 0),
-            "fiber": float(fi or 0),
-        })
+    lines = [
+        t("week.title", lang),
+        "",
+        t("week.days", lang, days=days),
+        "",
+        _line("macro.kcal", f"{float(calories):.0f}", f"{float(calories)/days:.1f}"),
+        _line("macro.protein", f"{float(protein):.1f} g", f"{float(protein)/days:.1f} g"),
+        _line("macro.fat", f"{float(fat):.1f} g", f"{float(fat)/days:.1f} g"),
+        _line("macro.carbs", f"{float(carbs):.1f} g", f"{float(carbs)/days:.1f} g"),
+        t(
+            "week.line",
+            lang,
+            label=t("week.net", lang),
+            total=f"{float(net):.1f} g",
+            avg=f"{float(net)/days:.1f} g",
+        ),
+    ]
 
-    totals_for_ai = {"total": total, "avg": avg}
-
-    # targets (optional)
-    targets = get_targets(user.id)
-    if targets:
-        totals_for_ai["targets"] = {
-            "calories": targets.get("calories"),
-            "protein": targets.get("protein"),
-            "fat": targets.get("fat"),
-            "carbs": targets.get("carbs"),
-            "net_carbs": targets.get("net_carbs"),
-            "mode": targets.get("mode"),
-        }
-
+    # --- AI-недельный анализ (как дневной, с микроэлементами) ---
     try:
-        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
-        analysis = ai_weekly_analysis_ru(
-            profile_hint=profile_hint,
-            start_date=start_date,
-            end_date=end_date,
-            days_logged=days,
-            totals=totals_for_ai,
-            items=items_for_ai,
+        profile_hint = build_profile_hint(user.id)
+    except Exception:
+        profile_hint = {}
+
+    targets = None
+    with db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT kcal, protein, fat, carbs, fiber, diet FROM targets WHERE user_id=%s",
+            (user.id,),
         )
-    except Exception as e:
-        await update.message.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
-        return
+        row = cur.fetchone()
+        if row:
+            targets = {
+                "kcal": float(row[0]) if row[0] is not None else None,
+                "protein": float(row[1]) if row[1] is not None else None,
+                "fat": float(row[2]) if row[2] is not None else None,
+                "carbs": float(row[3]) if row[3] is not None else None,
+                "fiber": float(row[4]) if row[4] is not None else None,
+                "diet": row[5],
+            }
 
-    lines = [f"🧠 Анализ недели (AI):", f"• {analysis.get('headline', '').strip()}"]
-
-    good = analysis.get("good") or []
-    improve = analysis.get("improve") or []
-    plan = analysis.get("plan") or []
-    warnings = analysis.get("warnings") or []
-
-    if good:
-        lines.append("\n✅ Что хорошо:")
-        lines.extend([f"• {x}" for x in good])
-
-    if improve:
-        lines.append("\n🛠 Что улучшить:")
-        lines.extend([f"• {x}" for x in improve])
-
-    if plan:
-        lines.append("\n📌 План на неделю:")
-        lines.extend([f"• {x}" for x in plan])
-
-    if warnings:
-        lines.append("\n⚠️ Предупреждения:")
-        lines.extend([f"• {x}" for x in warnings])
-
-    micro = analysis.get("micronutrients") or None
-    if isinstance(micro, dict) and micro:
-        lines.append("\n🧬 Микроэлементы:")
-        order = [
-            ("iron", "🩸 Железо"),
-            ("zinc", "🧷 Цинк"),
-            ("magnesium", "🧲 Магний"),
-            ("iodine", "🧂 Йод"),
-            ("selenium", "🌰 Селен"),
-            ("vitamin_b12", "💊 Витамин B12"),
-            ("calcium", "🥛 Кальций"),
-            ("antioxidants", "🍓 Антиоксиданты"),
-            ("omega_3", "🐟 Омега-3"),
-        ]
-        for k, label in order:
-            v = micro.get(k, "—")
-            lines.append(f"{label}: {v}")
-
-    # Progress vs targets: show AVG/day against targets (more useful for a week)
+    totals_payload = {
+        "days_with_logs": days,
+        "totals": {
+            "calories": float(calories),
+            "protein": float(protein),
+            "fat": float(fat),
+            "carbs": float(carbs),
+            "fiber": float(fiber),
+            "net_carbs": float(net),
+        },
+        "avg_per_day": {
+            "calories": float(calories)/days,
+            "protein": float(protein)/days,
+            "fat": float(fat)/days,
+            "carbs": float(carbs)/days,
+            "fiber": float(fiber)/days,
+            "net_carbs": float(net)/days,
+        },
+    }
     if targets:
-        def _pct(a: float, b: float) -> str:
-            if not b or b <= 0:
-                return "-"
-            return f"{(a / b) * 100:.0f}%"
+        totals_payload["targets"] = targets
 
-        t_cal = float(targets.get("calories") or 0)
-        t_p = float(targets.get("protein") or 0)
-        t_f = float(targets.get("fat") or 0)
-        t_c = float(targets.get("carbs") or 0)
-        t_nc = float(targets.get("net_carbs") or 0)
-        mode = targets.get("mode")
+    analysis = None
+    try:
+        analysis = ai_weekly_analysis_ru(profile_hint=profile_hint, period_label=t("week.title", lang), totals=totals_payload, food_examples=[])
+    except Exception:
+        analysis = None
 
-        lines.append("\n🎯 Среднее vs цель" + (f" ({mode})" if mode else "") + ":")
-        lines.append(
-            f"Ккал: {avg['calories']:.0f}/{t_cal:.0f} ({_pct(avg['calories'], t_cal)})" if t_cal else f"Ккал: {avg['calories']:.0f}")
-        lines.append(
-            f"Белки: {avg['protein']:.1f}/{t_p:.1f} г ({_pct(avg['protein'], t_p)})" if t_p else f"Белки: {avg['protein']:.1f} г")
-        lines.append(
-            f"Жиры: {avg['fat']:.1f}/{t_f:.1f} г ({_pct(avg['fat'], t_f)})" if t_f else f"Жиры: {avg['fat']:.1f} г")
-        lines.append(
-            f"Углеводы: {avg['carbs']:.1f}/{t_c:.1f} г ({_pct(avg['carbs'], t_c)})" if t_c else f"Углеводы: {avg['carbs']:.1f} г")
-        lines.append(
-            f"Чистые: {avg['net_carbs']:.1f}/{t_nc:.1f} г ({_pct(avg['net_carbs'], t_nc)})" if t_nc else f"Чистые: {avg['net_carbs']:.1f} г")
+    if isinstance(analysis, dict):
+        lines.append("")
+        lines.append(analysis.get("headline", "🗓️ Анализ недели"))
+        micro = analysis.get("micronutrients")
+        if isinstance(micro, dict) and micro:
+            lines.append("")
+            lines.append("🧬 Микроэлементы:")
+            order = [
+                ("iron", "🩸 Железо"),
+                ("zinc", "🧷 Цинк"),
+                ("magnesium", "🧲 Магний"),
+                ("iodine", "🧂 Йод"),
+                ("selenium", "🌰 Селен"),
+                ("vitamin_b12", "💊 Витамин B12"),
+                ("calcium", "🥛 Кальций"),
+                ("antioxidants", "🍓 Антиоксиданты"),
+                ("omega_3", "🐟 Омега-3"),
+            ]
+            for k, label in order:
+                v = micro.get(k) or "—"
+                lines.append(f"{label}: {v}")
 
-    lines.append(
-        "\n📊 Итоги за неделю:\n"
-        f"Период: {start_date} — {end_date} (дней с логами: {days})\n"
-        f"Ккал: {calories:.0f} (ср {avg['calories']:.0f}/день)\n"
-        f"Белки: {protein:.1f} г (ср {avg['protein']:.1f}/день)\n"
-        f"Жиры: {fat:.1f} г (ср {avg['fat']:.1f}/день)\n"
-        f"Углеводы: {carbs:.1f} г (ср {avg['carbs']:.1f}/день)\n"
-        f"Клетчатка: {fiber:.1f} г (ср {avg['fiber']:.1f}/день)\n"
-        f"Чистые углеводы: {net:.1f} г (ср {avg['net_carbs']:.1f}/день)"
-    )
+        for key, title in [("good", "✅ Что хорошо:"), ("improve", "🛠 Что улучшить:"), ("plan", "📌 План:"), ("warnings", "⚠️ Предупреждения:")]:
+            arr = analysis.get(key) or []
+            if arr:
+                lines.append("")
+                lines.append(title)
+                lines.extend([f"• {x}" for x in arr])
 
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text("".join(lines))
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -440,130 +374,6 @@ async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             "`/set_targets 1400 90 70 30 20 keto`",
             "(ккал, белки, жиры, угли, net, режим)",
         ]
-
-    # --- AI анализ периода (по желанию) ---
-    if days <= 14:
-        try:
-            # pull items for period (limit)
-            with db() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    '''
-                    SELECT
-                      entry_date,
-                      COALESCE(meal, 'other') AS meal,
-                      COALESCE(item_name, '') AS item_name,
-                      COALESCE(qty, 1)        AS qty,
-                      COALESCE(unit, 'serving') AS unit,
-                      COALESCE(calories, 0)   AS calories,
-                      COALESCE(protein, 0)    AS protein,
-                      COALESCE(fat, 0)        AS fat,
-                      COALESCE(carbs, 0)      AS carbs,
-                      COALESCE(fiber, 0)      AS fiber
-                    FROM entries
-                    WHERE user_id = %s AND entry_date >= %s
-                      AND item_name IS NOT NULL AND item_name <> ''
-                    ORDER BY entry_date, id
-                    LIMIT 80
-                    ''',
-                    (user.id, since),
-                )
-                rows_ai = cur.fetchall()
-
-            items_for_ai = []
-            for (d, meal, name, qty, unit, cal2, p2, f2, c2, fi2) in rows_ai:
-                items_for_ai.append({
-                    "date": d,
-                    "meal": meal,
-                    "name": name,
-                    "qty": float(qty) if qty is not None else 1.0,
-                    "unit": unit,
-                    "calories": float(cal2 or 0),
-                    "protein": float(p2 or 0),
-                    "fat": float(f2 or 0),
-                    "carbs": float(c2 or 0),
-                    "fiber": float(fi2 or 0),
-                })
-
-            totals_for_ai = {
-                "total": {
-                    "calories": float(cal),
-                    "protein": float(p),
-                    "fat": float(f),
-                    "carbs": float(c),
-                    "fiber": float(nc),
-                    "net_carbs": max(float(c) - float(nc), 0.0),
-                },
-                "avg": {
-                    "calories": avg_cal,
-                    "protein": avg_p,
-                    "fat": avg_f,
-                    "carbs": avg_c,
-                    "fiber": avg_nc,
-                    "net_carbs": max(avg_c - avg_nc, 0.0),
-                }
-            }
-
-            targets = get_targets(user.id)
-            if targets:
-                totals_for_ai["targets"] = {
-                    "calories": targets.get("calories"),
-                    "protein": targets.get("protein"),
-                    "fat": targets.get("fat"),
-                    "carbs": targets.get("carbs"),
-                    "net_carbs": targets.get("net_carbs"),
-                    "mode": targets.get("mode"),
-                }
-
-            profile_hint = build_profile_hint({"user_id": user.id, "language": get_user_language(user.id)})
-            analysis_ai = ai_weekly_analysis_ru(
-                profile_hint=profile_hint,
-                start_date=since,
-                end_date=datetime.now(TZ).date().isoformat(),
-                days_logged=days_logged,
-                totals=totals_for_ai,
-                items=items_for_ai,
-            )
-
-            lines += ["", "🧠 Анализ периода (AI):", f"• {analysis_ai.get('headline', '').strip()}"]
-
-            good = analysis_ai.get("good") or []
-            improve = analysis_ai.get("improve") or []
-            plan = analysis_ai.get("plan") or []
-            warnings = analysis_ai.get("warnings") or []
-
-            if good:
-                lines.append("✅ Что хорошо:")
-                lines.extend([f"• {x}" for x in good])
-            if improve:
-                lines.append("🛠 Что улучшить:")
-                lines.extend([f"• {x}" for x in improve])
-            if plan:
-                lines.append("📌 План:")
-                lines.extend([f"• {x}" for x in plan])
-            if warnings:
-                lines.append("⚠️ Предупреждения:")
-                lines.extend([f"• {x}" for x in warnings])
-
-            micro = analysis_ai.get("micronutrients") or None
-            if isinstance(micro, dict) and micro:
-                lines.append("🧬 Микроэлементы:")
-                order = [
-                    ("iron", "🩸 Железо"),
-                    ("zinc", "🧷 Цинк"),
-                    ("magnesium", "🧲 Магний"),
-                    ("iodine", "🧂 Йод"),
-                    ("selenium", "🌰 Селен"),
-                    ("vitamin_b12", "💊 Витамин B12"),
-                    ("calcium", "🥛 Кальций"),
-                    ("antioxidants", "🍓 Антиоксиданты"),
-                    ("omega_3", "🐟 Омега-3"),
-                ]
-                for k, label in order:
-                    lines.append(f"{label}: {micro.get(k, '—')}")
-        except Exception:
-            # silently skip AI block if anything fails
-            pass
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
@@ -737,7 +547,6 @@ async def cmd_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-
 async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     msg = update.message
@@ -788,7 +597,6 @@ async def cmd_del(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lang = get_user_language(user.id)
 
     await msg.reply_text(t("log.deleted", lang, name=name))
-
 
 async def cmd_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1044,21 +852,19 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return f"{(a / b) * 100:.0f}%"
 
         t_cal = float(targets.get("calories") or 0)
-        t_p = float(targets.get("protein") or 0)
-        t_f = float(targets.get("fat") or 0)
-        t_c = float(targets.get("carbs") or 0)
-        t_nc = float(targets.get("net_carbs") or 0)
+        t_p   = float(targets.get("protein") or 0)
+        t_f   = float(targets.get("fat") or 0)
+        t_c   = float(targets.get("carbs") or 0)
+        t_nc  = float(targets.get("net_carbs") or 0)
         mode = targets.get("mode")
 
         lines.append("\n🎯 Прогресс vs цель" + (f" ({mode})" if mode else "") + ":")
 
-        lines.append(
-            f"Ккал: {calories:.0f}/{t_cal:.0f} ({_pct(calories, t_cal)})" if t_cal else f"Ккал: {calories:.0f}")
+        lines.append(f"Ккал: {calories:.0f}/{t_cal:.0f} ({_pct(calories, t_cal)})" if t_cal else f"Ккал: {calories:.0f}")
         lines.append(f"Белки: {protein:.0f}/{t_p:.0f} г ({_pct(protein, t_p)})" if t_p else f"Белки: {protein:.0f} г")
         lines.append(f"Жиры: {fat:.0f}/{t_f:.0f} г ({_pct(fat, t_f)})" if t_f else f"Жиры: {fat:.0f} г")
         lines.append(f"Углеводы: {carbs:.0f}/{t_c:.0f} г ({_pct(carbs, t_c)})" if t_c else f"Углеводы: {carbs:.0f} г")
-        lines.append(
-            f"Чистые: {net_carbs:.0f}/{t_nc:.0f} г ({_pct(net_carbs, t_nc)})" if t_nc else f"Чистые: {net_carbs:.0f} г")
+        lines.append(f"Чистые: {net_carbs:.0f}/{t_nc:.0f} г ({_pct(net_carbs, t_nc)})" if t_nc else f"Чистые: {net_carbs:.0f} г")
     else:
         lines.append("\n🎯 Чтобы советы были персональнее, задай цели: /set_targets ... (или посмотри /goals)")
 
@@ -1073,7 +879,6 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
     await msg.reply_text("\n".join(lines))
-
 
 async def cmd_myid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1099,12 +904,10 @@ async def cmd_contact(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         "Чтобы отменить — напиши /cancel"
     )
 
-
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("contact_mode", None)
     if update.message:
         await update.message.reply_text("❌ Отменено.")
-
 
 async def cmd_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1138,7 +941,6 @@ async def cmd_goals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"Режим: {targets['mode']}")
 
     await msg.reply_text("\n".join(lines))
-
 
 # -------------------------
 # /notify (daily auto-report)
@@ -1276,7 +1078,6 @@ def _bar(x: float, goal: float, width: int = 10) -> str:
     filled = int(round(ratio * width))
     return "█" * filled + "░" * (width - filled)
 
-
 async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     msg = update.message
@@ -1343,18 +1144,16 @@ async def cmd_progress(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         lines.append(
             f"• {d.strftime('%d.%m')}: "
-            f"ккал {kcal:.0f}/{kcal_goal:.0f} {_bar(kcal, kcal_goal)} | "
-            f"Б {p:.0f}/{p_goal:.0f} {_bar(p, p_goal)} | "
-            f"net {net:.0f}/{nc_goal:.0f} {_bar(net, nc_goal)}"
+            f"ккал {kcal:.0f}/{kcal_goal:.0f} {_bar(kcal,kcal_goal)} | "
+            f"Б {p:.0f}/{p_goal:.0f} {_bar(p,p_goal)} | "
+            f"net {net:.0f}/{nc_goal:.0f} {_bar(net,nc_goal)}"
         )
 
     lines.append(f"\n✅ Дней близко к цели: {days_in_goal}/{len(rows)}")
     await msg.reply_text("\n".join(lines))
 
-
 def _is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
-
 
 async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1416,8 +1215,7 @@ async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         conn.commit()
 
-    human_expires = "навсегда" if expires_at is None else expires_at.astimezone(timezone.utc).strftime(
-        "%Y-%m-%d %H:%M UTC")
+    human_expires = "навсегда" if expires_at is None else expires_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     await msg.reply_text(f"✅ Доступ выдан user_id={target_user_id}, план={plan or '—'}, до: {human_expires}")
 
     # опционально: уведомить пользователя
@@ -1429,7 +1227,6 @@ async def cmd_grant(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         # если пользователь не писал боту или блокнул, просто молчим
         pass
-
 
 async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1486,7 +1283,6 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"Создано: {created_at}\n"
         f"Обновлено: {updated_at}"
     )
-
 
 async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
@@ -1594,8 +1390,7 @@ async def cmd_case(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines.append("📌 Кейс: расчёты и рацион (3 дня)")
     lines.append("")
     lines.append("👤 Данные:")
-    lines.append(
-        f"- Пол: {'мужчина' if ex.get('sex') == 'male' else ('женщина' if ex.get('sex') == 'female' else '—')}")
+    lines.append(f"- Пол: { 'мужчина' if ex.get('sex')=='male' else ('женщина' if ex.get('sex')=='female' else '—') }")
     lines.append(f"- Возраст: {_fmt(ex.get('age'), 0)}")
     lines.append(f"- Рост: {_fmt(ex.get('height_cm'), 0)} см")
     lines.append(f"- Вес: {_fmt(ex.get('weight_kg'), 0)} кг")
@@ -1630,7 +1425,7 @@ async def cmd_case(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     lines.append("🍽 Рацион на 3 дня:")
     for day in menu:
         d = day.get("day")
-        lines.append(f"\nДень {int(d) if isinstance(d, (int, float)) else d}:")
+        lines.append(f"\nДень {int(d) if isinstance(d,(int,float)) else d}:")
         for m in (day.get("meals") or []):
             lines.append(f"• {m.get('name')}:")
             for it in (m.get("items") or []):
