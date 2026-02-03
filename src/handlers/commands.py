@@ -340,12 +340,12 @@ async def cmd_set_targets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             INSERT INTO targets (user_id, kcal, protein, fat, carbs, net_carbs, diet, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET
-              calories = EXCLUDED.calories,
+              kcal = EXCLUDED.kcal,
               protein = EXCLUDED.protein,
               fat = EXCLUDED.fat,
               carbs = EXCLUDED.carbs,
               net_carbs = EXCLUDED.net_carbs,
-              mode = EXCLUDED.mode,
+              diet = EXCLUDED.diet,
               updated_at = EXCLUDED.updated_at
             """,
             (user.id, kcal, protein, fat, carbs, net_carbs, mode, datetime.now(TZ).isoformat(timespec="seconds")),
