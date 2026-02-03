@@ -78,14 +78,33 @@ def _analysis_json_schema_ru():
             "additionalProperties": False,
             "properties": {
                 "headline": {"type": "string"},
+                "micronutrients": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "iron": {"type": "string"},
+                        "zinc": {"type": "string"},
+                        "magnesium": {"type": "string"},
+                        "iodine": {"type": "string"},
+                        "selenium": {"type": "string"},
+                        "vitamin_b12": {"type": "string"},
+                        "calcium": {"type": "string"},
+                        "antioxidants": {"type": "string"},
+                        "omega_3": {"type": "string"}
+                    },
+                    "required": [
+                        "iron","zinc","magnesium","iodine","selenium",
+                        "vitamin_b12","calcium","antioxidants","omega_3"
+                    ]
+                },
                 "good": {"type": "array", "items": {"type": "string"}},
                 "improve": {"type": "array", "items": {"type": "string"}},
                 "plan": {"type": "array", "items": {"type": "string"}},
                 "warnings": {"type": "array", "items": {"type": "string"}},
-                "confidence": {"type": "number"},
+                "confidence": {"type": "number"}
             },
-            "required": ["headline", "good", "improve", "plan", "warnings", "confidence"],
-        },
+            "required": ["headline","micronutrients","good","improve","plan","warnings","confidence"]
+        }
     }
 
 
@@ -401,50 +420,34 @@ Meal hint: "{meal_hint}"
     return items, meta["confidence"], meta
 
 def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: list[dict]) -> dict:
-    """
-    totals: {"calories":..., "protein":..., "fat":..., "carbs":..., "fiber":..., "net_carbs":...}
-    items: [{"meal":..., "name":..., "qty":..., "unit":..., "calories":..., "protein":..., "fat":..., "carbs":..., "fiber":...}, ...]
-    """
     prompt = f"""
-Ты — нутри-ассистент и ведёшь дневник питания конкретного пользователя.
-Твоя задача: дать персональные, короткие и практичные рекомендации по итогам дня.
+Ты — нутри-ассистент и анализируешь дневник питания.
 
-Важно:
-- Используй данные из профиля, целей (targets) и списка еды. Ничего не выдумывай.
-- Если в totals есть ключ "targets", сравни фактические итоги с целями:
-  * укажи 1–2 главных отклонения (недобор/перебор) как приоритет.
-  * советы должны прямо закрывать эти отклонения.
-- Пиши по-русски, дружелюбно, без лекций и без медицинских диагнозов.
-- Напиши так же разбор по микроэлементы — где провалы, а так же анализ антагонистов, ингибиторов и синергистов. По дефецитам и что хорошо закрыто.
-по железу, цинку, магнию, йоду,  селену, витамин B12, кальцию, антиоксидантам и омега
-Напиши все элементы и их статус
-- Добавляй «картинки» в тексте: используй эмодзи в начале headline и пунктов (✅🛠📌⚠️🍽️🎯).
-- Советы должны быть конкретными и выполнимыми завтра.
+ВАЖНО:
+- НЕ считай калории и БЖУ — используй готовые totals.
+- Дай статус по каждому микроэлементу:
+  железо, цинк, магний, йод, селен, витамин B12, кальций, антиоксиданты, омега‑3.
+- Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
+- Учитывай ингибиторы и синергисты.
+- Пиши кратко и практично.
 
-Профиль (может быть неполный):
+Профиль:
 {json.dumps(profile_hint, ensure_ascii=False)}
 
 День: {day}
 
-Съедено (список):
+Еда:
 {json.dumps(items, ensure_ascii=False)}
 
-Итоги (включая targets, если есть):
+Итоги:
 {json.dumps(totals, ensure_ascii=False)}
-
-Требования к ответу:
-- Верни JSON строго по схеме.
-- headline: 1 короткая строка с главным выводом + эмодзи.
-- микроэлементы
-- good/improve/plan/warnings: короткие пункты (до ~12 слов), каждый с эмодзи в начале.
-- Если данных мало или цели не заданы — скажи это и дай 1–2 универсальных совета.
 """.strip()
 
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_schema", "json_schema": _analysis_json_schema_ru()},
-        temperature=0.4,
+        temperature=0.4
     )
     return json.loads(resp.choices[0].message.content)
 
