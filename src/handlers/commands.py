@@ -210,27 +210,22 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     def _line(label_key: str, total: str, avg: str) -> str:
         return t("week.line", lang, label=t(label_key, lang), total=total, avg=avg)
 
-    lines = [
-        t("week.title", lang),
-        "",
-        t("week.days", lang, days=days),
-        "",
-        _line("macro.kcal", f"{float(calories):.0f}", f"{float(calories)/days:.1f}"),
-        _line("macro.protein", f"{float(protein):.1f} g", f"{float(protein)/days:.1f} g"),
-        _line("macro.fat", f"{float(fat):.1f} g", f"{float(fat)/days:.1f} g"),
-        _line("macro.carbs", f"{float(carbs):.1f} g", f"{float(carbs)/days:.1f} g"),
-        t(
-            "week.line",
-            lang,
-            label=t("week.net", lang),
-            total=f"{float(net):.1f} g",
-            avg=f"{float(net)/days:.1f} g",
-        ),
-    ]
+    # базовый текстовый summary (читаемый формат, построчно)
+    lines = []
+    lines.append(t("week.title", lang))
+    lines.append(f"📅 Дней с записями: {days}")
+    lines.append("")
+    lines.append(f"🔥 Ккал: {float(calories):.0f} (ср {float(calories)/days:.0f}/день)")
+    lines.append(f"🥩 Белки: {float(protein):.1f} г (ср {float(protein)/days:.1f}/день)")
+    lines.append(f"🧈 Жиры: {float(fat):.1f} г (ср {float(fat)/days:.1f}/день)")
+    lines.append(f"🥔 Углеводы: {float(carbs):.1f} г (ср {float(carbs)/days:.1f}/день)")
+    lines.append(f"🍬 Чистые: {float(net):.1f} г (ср {float(net)/days:.1f}/день)")
+    lines.append(f"🥬 Клетчатка: {float(fiber):.1f} г (ср {float(fiber)/days:.1f}/день)")
 
-    # --- AI-недельный анализ (как дневной, с микроэлементами) ---
+    # --- AI-недельный анализ
+    # (как дневной, с микроэлементами) ---
     try:
-        profile_hint = build_profile_hint(user.id)
+        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
     except Exception:
         profile_hint = {}
 
@@ -283,6 +278,7 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(analysis, dict):
         lines.append("")
         lines.append(analysis.get("headline", "🗓️ Анализ недели"))
+        lines.append("")
         micro = analysis.get("micronutrients")
         if isinstance(micro, dict) and micro:
             lines.append("")
