@@ -443,3 +443,105 @@ def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: l
         temperature=0.4,
     )
     return json.loads(resp.choices[0].message.content)
+
+def _case_plan_json_schema_ru():
+    return {
+        "name": "case_plan_ru",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "extracted": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "sex": {"type": "string", "enum": ["male", "female", "unknown"]},
+                        "age": {"type": ["number", "null"]},
+                        "height_cm": {"type": ["number", "null"]},
+                        "weight_kg": {"type": ["number", "null"]},
+                        "activity": {"type": "string"},
+                        "goal": {"type": "string"},
+                        "preferences": {"type": "array", "items": {"type": "string"}},
+                        "restrictions": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["sex", "age", "height_cm", "weight_kg", "activity", "goal", "preferences", "restrictions"],
+                },
+                "calculations": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "bmi": {"type": ["number", "null"]},
+                        "bmr": {"type": ["number", "null"]},
+                        "ka": {"type": ["number", "null"]},
+                        "tdee": {"type": ["number", "null"]},
+                        "target_kcal": {"type": ["number", "null"]},
+                        "protein_g": {"type": ["number", "null"]},
+                        "fat_g": {"type": ["number", "null"]},
+                        "carbs_g": {"type": ["number", "null"]},
+                        "notes": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": ["bmi", "bmr", "ka", "tdee", "target_kcal", "protein_g", "fat_g", "carbs_g", "notes"],
+                },
+                "menu_3days": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "day": {"type": "number"},
+                            "meals": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "items": {"type": "array", "items": {"type": "string"}},
+                                    },
+                                    "required": ["name", "items"],
+                                },
+                            },
+                        },
+                        "required": ["day", "meals"],
+                    },
+                },
+                "confidence": {"type": "number"},
+            },
+            "required": ["extracted", "calculations", "menu_3days", "confidence"],
+        },
+    }
+
+
+def ai_case_plan_ru(*, profile_hint: dict, case_text: str) -> dict:
+    prompt = f"""
+Ты — нутри-ассистент. По описанию кейса нужно:
+1) Извлечь: пол, возраст, рост, вес, активность, цель, предпочтения и ограничения.
+2) Рассчитать:
+   - ИМТ = вес(кг) / (рост(м)^2)
+   - ВОО (BMR) по Mifflin–St Jeor:
+       муж: 10*вес + 6.25*рост - 5*возраст + 5
+       жен: 10*вес + 6.25*рост - 5*возраст - 161
+   - КА: сидячий=1.2, лёгкая=1.375, умеренная=1.55, высокая=1.725
+   - СПК (TDEE) = BMR * КА
+   - Целевая калорийность: для "снижения жира" возьми дефицит 15% (TDEE*0.85), но не ниже 1500 ккал для мужчин, если нет иных данных.
+   - БЖУ: белок 1.8 г/кг; жир 0.9 г/кг; углеводы = остаток по калориям.
+3) Составить рацион на 3 дня (завтрак/обед/ужин/перекус), учитывая предпочтения и ограничения.
+Важно:
+- Ничего не выдумывай: если данных нет, ставь null и добавляй пояснение в notes.
+- Пиши пункты меню конкретно: продукты + примерные порции (в граммах/шт), без "магии".
+- Ответ строго JSON по схеме.
+
+Профиль (может быть неполный, используй только если релевантно):
+{json.dumps(profile_hint, ensure_ascii=False)}
+
+Кейс:
+{case_text}
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": _case_plan_json_schema_ru()},
+        temperature=0.3,
+    )
+    return json.loads(resp.choices[0].message.content)

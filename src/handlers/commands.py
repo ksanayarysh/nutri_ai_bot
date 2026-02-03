@@ -4,7 +4,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.ai import ai_estimate, ai_daily_analysis_ru
+from src.ai import ai_estimate, ai_daily_analysis_ru, ai_case_plan_ru
 from src.db import ensure_user, get_targets
 from src.handlers.messages import unit_label, meal_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
@@ -15,7 +15,7 @@ from src.config import ADMIN_IDS
 from datetime import datetime, timedelta, timezone
 from src.config import TZ
 from src.db import db, today_str
-from src.subscriptions import is_subscribed_user
+from src.subscriptions import is_subscribed_user, is_subscribed
 from src.jobs.notifications import (
     ensure_notify_settings,
     set_daily_enabled,
@@ -1255,3 +1255,102 @@ async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await msg.reply_text("Pronto! Agora o idioma é PT-BR 🇧🇷")
     else:
         await msg.reply_text("Готово! Теперь язык — русский 🇷🇺")
+
+
+async def cmd_case(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    msg = update.message
+    if not user or not msg:
+        return
+
+    if not is_subscribed(user.id):
+        await msg.reply_text(
+            "🔒 Команда /case доступна только по подписке.\n"
+            "Оформить доступ: /pay"
+        )
+        return
+
+    # берём весь текст после /case (включая многострочник)
+    full = (msg.text or "").strip()
+    case_text = full.replace("/case", "", 1).strip()
+
+    if not case_text:
+        await msg.reply_text(
+            "Формат:\n"
+            "/case <описание кейса>\n\n"
+            "Пример:\n"
+            "/case Мужчина, 35 лет, рост 180 см, вес 85 кг...\n"
+        )
+        return
+
+    lang = get_user_language(user.id)
+    profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
+
+    try:
+        data = ai_case_plan_ru(profile_hint=profile_hint, case_text=case_text)
+    except Exception as e:
+        await msg.reply_text(f"ai сломался: {type(e).__name__}: {str(e)[:200]}")
+        return
+
+    # красивый рендер в текст (без таблиц, чтобы Telegram не устраивал цирк)
+    ex = data.get("extracted", {})
+    calc = data.get("calculations", {})
+    menu = data.get("menu_3days", [])
+    conf = float(data.get("confidence", 0.0))
+
+    def _fmt(x, nd=0):
+        if x is None:
+            return "—"
+        try:
+            return f"{float(x):.{nd}f}"
+        except Exception:
+            return "—"
+
+    lines = []
+    lines.append("📌 Кейс: расчёты и рацион (3 дня)")
+    lines.append("")
+    lines.append("👤 Данные:")
+    lines.append(f"- Пол: { 'мужчина' if ex.get('sex')=='male' else ('женщина' if ex.get('sex')=='female' else '—') }")
+    lines.append(f"- Возраст: {_fmt(ex.get('age'), 0)}")
+    lines.append(f"- Рост: {_fmt(ex.get('height_cm'), 0)} см")
+    lines.append(f"- Вес: {_fmt(ex.get('weight_kg'), 0)} кг")
+    lines.append(f"- Активность: {ex.get('activity') or '—'}")
+    lines.append(f"- Цель: {ex.get('goal') or '—'}")
+
+    prefs = ex.get("preferences") or []
+    restr = ex.get("restrictions") or []
+    if prefs:
+        lines.append(f"- Предпочтения: {', '.join(prefs)}")
+    if restr:
+        lines.append(f"- Ограничения: {', '.join(restr)}")
+
+    lines.append("")
+    lines.append("🧮 Расчёты:")
+    lines.append(f"- ИМТ: {_fmt(calc.get('bmi'), 1)}")
+    lines.append(f"- ВОО (BMR): {_fmt(calc.get('bmr'), 0)} ккал")
+    lines.append(f"- КА: {_fmt(calc.get('ka'), 3)}")
+    lines.append(f"- СПК (TDEE): {_fmt(calc.get('tdee'), 0)} ккал")
+    lines.append(f"- Целевая калорийность: {_fmt(calc.get('target_kcal'), 0)} ккал")
+    lines.append(f"- Белок: {_fmt(calc.get('protein_g'), 0)} г")
+    lines.append(f"- Жиры: {_fmt(calc.get('fat_g'), 0)} г")
+    lines.append(f"- Углеводы: {_fmt(calc.get('carbs_g'), 0)} г")
+
+    notes = calc.get("notes") or []
+    if notes:
+        lines.append("")
+        lines.append("📝 Примечания:")
+        lines.extend([f"• {n}" for n in notes[:6]])
+
+    lines.append("")
+    lines.append("🍽 Рацион на 3 дня:")
+    for day in menu:
+        d = day.get("day")
+        lines.append(f"\nДень {int(d) if isinstance(d,(int,float)) else d}:")
+        for m in (day.get("meals") or []):
+            lines.append(f"• {m.get('name')}:")
+            for it in (m.get("items") or []):
+                lines.append(f"  - {it}")
+
+    lines.append(f"\n🤖 Уверенность AI: {conf:.2f}")
+
+    await msg.reply_text("\n".join(lines))
