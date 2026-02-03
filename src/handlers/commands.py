@@ -761,8 +761,30 @@ async def cmd_analyze_today(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         lines.extend([f"• {x}" for x in plan])
 
     if warnings:
-        lines.append("\n⚠️ Предупреждения:")
+        lines.append("⚠️ Предупреждения:")
         lines.extend([f"• {x}" for x in warnings])
+
+    # ✅ БЛОК "МИКРОЭЛЕМЕНТЫ" (если модель вернула micronutrients)
+    micro = analysis.get("micronutrients") or None
+    if isinstance(micro, dict) and micro:
+        lines.append("🧬 Микроэлементы:")
+        # фиксируем порядок и человеко-читаемые названия
+        order = [
+            ("iron", "🩸 Железо"),
+            ("zinc", "🧷 Цинк"),
+            ("magnesium", "🧲 Магний"),
+            ("iodine", "🧂 Йод"),
+            ("selenium", "🌰 Селен"),
+            ("vitamin_b12", "💊 Витамин B12"),
+            ("calcium", "🥛 Кальций"),
+            ("antioxidants", "🍓 Антиоксиданты"),
+            ("omega_3", "🐟 Омега-3"),
+        ]
+        for k, label in order:
+            v = micro.get(k)
+            if v is None:
+                v = "—"
+            lines.append(f"{label}: {v}")
 
     # ✅ БЛОК "ПРОГРЕСС VS ЦЕЛЬ"
     if targets:

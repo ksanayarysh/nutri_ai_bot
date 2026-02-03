@@ -430,6 +430,7 @@ def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: l
 - Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
 - Учитывай ингибиторы и синергисты.
 - Пиши кратко и практично.
+- Не добавляй эмодзи в начале строки! это важно
 
 Профиль:
 {json.dumps(profile_hint, ensure_ascii=False)}
