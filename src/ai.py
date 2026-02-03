@@ -512,26 +512,177 @@ def _case_plan_json_schema_ru():
     }
 
 
+def _case_extract_json_schema_ru():
+    """
+    Schema for *extracting* case inputs only.
+    We keep this separate so the model can't "helpfully" recalculate numbers.
+    """
+    return {
+        "name": "case_extract_ru",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "sex": {"type": "string", "enum": ["male", "female", "unknown"]},
+                "age": {"type": ["number", "null"]},
+                "height_cm": {"type": ["number", "null"]},
+                "weight_kg": {"type": ["number", "null"]},
+                "activity": {"type": "string"},
+                "goal": {"type": "string"},
+                "preferences": {"type": "array", "items": {"type": "string"}},
+                "restrictions": {"type": "array", "items": {"type": "string"}},
+                "notes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["sex", "age", "height_cm", "weight_kg", "activity", "goal", "preferences", "restrictions", "notes"],
+        },
+    }
+
+
+def _menu_only_json_schema_ru():
+    """Schema for generating only the 3-day menu (no calculations)."""
+    return {
+        "name": "case_menu_ru",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "menu_3days": _case_plan_json_schema_ru()["schema"]["properties"]["menu_3days"],
+                "confidence": {"type": "number"},
+                "notes": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["menu_3days", "confidence", "notes"],
+        },
+    }
+
+
+def _normalize_activity_to_ka(activity: str) -> tuple[float | None, str]:
+    """
+    Return (KA, label). If unrecognized -> (None, original).
+    Accepts both RU/EN variants and your enum-like strings.
+    """
+    a = (activity or "").strip().lower()
+
+    # direct enum values
+    if a in ("sedentary", "сидячий", "сидячая"):
+        return 1.2, "сидячий"
+    if a in ("light", "легкая", "лёгкая"):
+        return 1.375, "лёгкая"
+    if a in ("moderate", "умеренная"):
+        return 1.55, "умеренная"
+    if a in ("high", "высокая"):
+        return 1.725, "высокая"
+
+    # fuzzy keywords
+    if any(k in a for k in ("сидяч", "малоподвиж", "sedent")):
+        return 1.2, "сидячий"
+    if any(k in a for k in ("лёг", "легк", "light")):
+        return 1.375, "лёгкая"
+    if any(k in a for k in ("умерен", "moderate")):
+        return 1.55, "умеренная"
+    if any(k in a for k in ("высок", "high", "интенсив", "спорт")):
+        return 1.725, "высокая"
+
+    return None, activity
+
+
+def _calc_case_numbers(*, sex: str, age, height_cm, weight_kg, activity: str, goal: str) -> dict:
+    """
+    STRICT math in Python (no LLM arithmetic):
+    - BMI
+    - BMR (Mifflin–St Jeor)
+    - KA
+    - TDEE
+    - Target kcal (15% deficit)
+    - Macros: protein 1.8 g/kg, fat 0.9 g/kg, carbs = kcal remainder
+    """
+    notes: list[str] = []
+
+    # Validate required inputs for math
+    if age is None or height_cm is None or weight_kg is None:
+        notes.append("Недостаточно данных для расчётов (возраст/рост/вес).")
+        return {
+            "bmi": None, "bmr": None, "ka": None, "tdee": None,
+            "target_kcal": None, "protein_g": None, "fat_g": None, "carbs_g": None,
+            "notes": notes,
+        }
+
+    age = float(age)
+    height_cm = float(height_cm)
+    weight_kg = float(weight_kg)
+
+    # BMI
+    height_m = height_cm / 100.0
+    bmi = weight_kg / (height_m ** 2)
+
+    # BMR: Mifflin–St Jeor
+    if sex == "male":
+        bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age + 5
+    else:
+        if sex == "unknown":
+            notes.append("Пол не распознан, BMR посчитан по формуле для женщин.")
+        bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age - 161
+
+    # KA
+    ka, ka_label = _normalize_activity_to_ka(activity)
+    if ka is None:
+        notes.append(f"Активность не распознана: '{activity}'. KA не рассчитан.")
+        return {
+            "bmi": round(bmi, 1), "bmr": round(bmr), "ka": None, "tdee": None,
+            "target_kcal": None, "protein_g": None, "fat_g": None, "carbs_g": None,
+            "notes": notes,
+        }
+
+    # TDEE
+    tdee = bmr * ka
+
+    # Target kcal: 15% deficit for fat loss (default)
+    target_kcal = tdee * 0.85
+
+    # Safety floor for men only (as you had in the prompt)
+    if sex == "male" and target_kcal < 1000:
+        notes.append("Целевая калорийность поднята до 1000 ккал (правило для мужчин).")
+        target_kcal = 1000
+
+    # Macros
+    protein_g = 1.8 * weight_kg
+    fat_g = 0.9 * weight_kg
+
+    kcal_from_protein = protein_g * 4
+    kcal_from_fat = fat_g * 9
+    kcal_left = max(0.0, target_kcal - kcal_from_protein - kcal_from_fat)
+    carbs_g = kcal_left / 4
+
+    return {
+        "bmi": round(bmi, 1),
+        "bmr": round(bmr),
+        "ka": round(ka, 3),
+        "tdee": round(tdee),
+        "target_kcal": round(target_kcal),
+        "protein_g": round(protein_g),
+        "fat_g": round(fat_g),
+        "carbs_g": round(carbs_g),
+        "notes": notes,
+    }
+
+
 def ai_case_plan_ru(*, profile_hint: dict, case_text: str) -> dict:
-    prompt = f"""
-Ты — нутри-ассистент. По описанию кейса нужно:
-1) Извлечь: пол, возраст, рост, вес, активность, цель, предпочтения и ограничения.
-2) Рассчитать:
-   - ИМТ = вес(кг) / (рост(м)^2)
-   - ВОО (BMR) по Mifflin–St Jeor:
-       муж: 10*вес + 6.25*рост - 5*возраст + 5
-       жен: 10*вес + 6.25*рост - 5*возраст - 161
-   - КА: сидячий=1.2, лёгкая=1.375, умеренная=1.55, высокая=1.725
-   - СПК (TDEE) = BMR * КА
-   - Целевая калорийность: для "снижения жира" возьми дефицит 15% (TDEE*0.85), но не ниже 1000 ккал для мужчин, если нет иных данных.
-   - БЖУ: белок 1.8 г/кг; жир 0.9 г/кг; углеводы = остаток по калориям.
-3) Составить рацион на 3 дня (завтрак/обед/ужин/перекус), учитывая предпочтения и ограничения.
-Важно:
-- Ничего не выдумывай: если данных нет, ставь null и добавляй пояснение в notes.
-- Пиши пункты меню конкретно: продукты + примерные порции (в граммах/шт), без "магии".
-- Пиши так же калорийность блюд и процент от рекомендованной суточной калорийности
-- напиши подробно расчет ВОО, это обязательно, распиши подробно
-- Ответ строго JSON по схеме.
+    """
+    Case workflow:
+    1) LLM extracts inputs only (JSON).
+    2) Python computes all numbers (no LLM arithmetic).
+    3) LLM generates only the 3-day menu using the computed targets.
+    4) We assemble final response matching _case_plan_json_schema_ru().
+    """
+    # 1) Extract inputs (LLM)
+    extract_prompt = f"""
+Ты — нутри-ассистент. Твоя задача: извлечь данные из кейса и вернуть ТОЛЬКО JSON по схеме.
+НЕ ДЕЛАЙ расчётов. НЕ ПИШИ меню.
+
+Правила:
+- age: брать только рядом со словами "возраст" или "лет"
+- height_cm: брать только рядом со словами "рост" или "см"
+- weight_kg: брать только рядом со словами "вес" или "кг"
+- Если не уверен — ставь null и объясни в notes.
 
 Профиль (может быть неполный, используй только если релевантно):
 {json.dumps(profile_hint, ensure_ascii=False)}
@@ -540,10 +691,83 @@ def ai_case_plan_ru(*, profile_hint: dict, case_text: str) -> dict:
 {case_text}
 """.strip()
 
-    resp = client.chat.completions.create(
+    extract_resp = client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_schema", "json_schema": _case_plan_json_schema_ru()},
+        messages=[{"role": "user", "content": extract_prompt}],
+        response_format={"type": "json_schema", "json_schema": _case_extract_json_schema_ru()},
+        temperature=0.0,
+    )
+    extracted = json.loads(extract_resp.choices[0].message.content)
+
+    # 2) Compute numbers in Python (truth)
+    calculations = _calc_case_numbers(
+        sex=extracted.get("sex", "unknown"),
+        age=extracted.get("age"),
+        height_cm=extracted.get("height_cm"),
+        weight_kg=extracted.get("weight_kg"),
+        activity=extracted.get("activity", ""),
+        goal=extracted.get("goal", ""),
+    )
+
+    # 3) Generate menu only (LLM)
+    menu_prompt = f"""
+Ты — нутри-ассистент. Составь рацион на 3 дня (завтрак/перекус/обед/перекус/ужин).
+ВАЖНО:
+- НЕ ПЕРЕСЧИТЫВАЙ BMR/TDEE/калории/БЖУ. Используй только переданные цифры.
+- Пиши конкретно: продукты + порции (в граммах/шт).
+- Для каждого приёма пищи укажи примерные ккал и % от target_kcal.
+- Учитывай preferences/restrictions.
+- Если данных не хватает, не выдумывай, добавь в notes.
+
+Исходные данные:
+{json.dumps(extracted, ensure_ascii=False)}
+
+Готовые расчёты (истина):
+{json.dumps(calculations, ensure_ascii=False)}
+""".strip()
+
+    menu_resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": menu_prompt}],
+        response_format={"type": "json_schema", "json_schema": _menu_only_json_schema_ru()},
         temperature=0.3,
     )
-    return json.loads(resp.choices[0].message.content)
+    menu_data = json.loads(menu_resp.choices[0].message.content)
+
+    # 4) Assemble final object
+    final_notes = []
+    final_notes.extend(extracted.get("notes", []))
+    final_notes.extend(calculations.get("notes", []))
+    final_notes.extend(menu_data.get("notes", []))
+
+    # ensure extracted has required fields present per case_plan schema
+    extracted.setdefault("preferences", [])
+    extracted.setdefault("restrictions", [])
+    extracted.setdefault("goal", extracted.get("goal") or "")
+    extracted.setdefault("activity", extracted.get("activity") or "")
+
+    return {
+        "extracted": {
+            "sex": extracted.get("sex", "unknown"),
+            "age": extracted.get("age"),
+            "height_cm": extracted.get("height_cm"),
+            "weight_kg": extracted.get("weight_kg"),
+            "activity": extracted.get("activity", ""),
+            "goal": extracted.get("goal", ""),
+            "preferences": extracted.get("preferences", []),
+            "restrictions": extracted.get("restrictions", []),
+        },
+        "calculations": {
+            "bmi": calculations.get("bmi"),
+            "bmr": calculations.get("bmr"),
+            "ka": calculations.get("ka"),
+            "tdee": calculations.get("tdee"),
+            "target_kcal": calculations.get("target_kcal"),
+            "protein_g": calculations.get("protein_g"),
+            "fat_g": calculations.get("fat_g"),
+            "carbs_g": calculations.get("carbs_g"),
+            "notes": final_notes,
+        },
+        "menu_3days": menu_data.get("menu_3days", []),
+        "confidence": float(menu_data.get("confidence", 0.7)),
+    }
