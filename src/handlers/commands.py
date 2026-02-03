@@ -337,7 +337,7 @@ async def cmd_set_targets(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         cur = conn.cursor()
         cur.execute(
             """
-            INSERT INTO targets (user_id, calories, protein, fat, carbs, net_carbs, mode, updated_at)
+            INSERT INTO targets (user_id, kcal, protein, fat, carbs, net_carbs, mode, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (user_id) DO UPDATE SET
               calories = EXCLUDED.calories,
