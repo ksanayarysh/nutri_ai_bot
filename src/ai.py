@@ -7,6 +7,22 @@ from src.food_structure.food import Macros as AiItem
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+FIBER_LIKELY = (
+    "чиа", "chia",
+    "огур", "cucumber",
+    "помид", "tomat",
+    "салат", "alface", "salad",
+    "брок", "broccoli", "brócolis",
+    "капуст", "cabbage",
+    "овощ", "vegetable", "legume",
+    "сем", "seed",
+    "орех", "nut",
+    "ягод", "berry",
+    "фасол", "feijão", "beans",
+    "зерн", "cereal", "granola", "aveia", "oats",
+    "цельн", "whole",
+    "fruit", "fruta"
+)
 
 FOOD_CATEGORIES = {
     "egg": ["яйц", "egg"],
@@ -90,40 +106,22 @@ def _analysis_json_schema_ru():
                         "vitamin_b12": {"type": "string"},
                         "calcium": {"type": "string"},
                         "antioxidants": {"type": "string"},
-                        "omega_3": {"type": "string"}
+                        "omega_3": {"type": "string"},
                     },
                     "required": [
                         "iron","zinc","magnesium","iodine","selenium",
                         "vitamin_b12","calcium","antioxidants","omega_3"
-                    ]
+                    ],
                 },
                 "good": {"type": "array", "items": {"type": "string"}},
                 "improve": {"type": "array", "items": {"type": "string"}},
                 "plan": {"type": "array", "items": {"type": "string"}},
                 "warnings": {"type": "array", "items": {"type": "string"}},
-                "confidence": {"type": "number"}
+                "confidence": {"type": "number"},
             },
-            "required": ["headline","micronutrients","good","improve","plan","warnings","confidence"]
-        }
+            "required": ["headline","micronutrients","good","improve","plan","warnings","confidence"],
+        },
     }
-
-
-FIBER_LIKELY = (
-    "чиа", "chia",
-    "огур", "cucumber",
-    "помид", "tomat",
-    "салат", "alface", "salad",
-    "брок", "broccoli", "brócolis",
-    "капуст", "cabbage",
-    "овощ", "vegetable", "legume",
-    "сем", "seed",
-    "орех", "nut",
-    "ягод", "berry",
-    "фасол", "feijão", "beans",
-    "зерн", "cereal", "granola", "aveia", "oats",
-    "цельн", "whole",
-    "fruit", "fruta"
-)
 
 
 def detect_food_category(name: str) -> str:
@@ -420,86 +418,47 @@ Meal hint: "{meal_hint}"
     return items, meta["confidence"], meta
 
 def ai_daily_analysis_ru(*, profile_hint: dict, day: str, totals: dict, items: list[dict]) -> dict:
+    """
+    totals: {"calories":..., "protein":..., "fat":..., "carbs":..., "fiber":..., "net_carbs":...}
+    items: [{"meal":..., "name":..., "qty":..., "unit":..., "calories":..., "protein":..., "fat":..., "carbs":..., "fiber":...}, ...]
+    """
     prompt = f"""
-Ты — нутри-ассистент и анализируешь дневник питания.
+Ты — нутри-ассистент и ведёшь дневник питания конкретного пользователя.
+Твоя задача: дать персональные, короткие и практичные рекомендации по итогам дня.
 
-ВАЖНО:
-- НЕ считай калории и БЖУ — используй готовые totals.
-- Дай статус по каждому микроэлементу:
-  железо, цинк, магний, йод, селен, витамин B12, кальций, антиоксиданты, омега‑3.
-- Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
-- Учитывай ингибиторы и синергисты.
-- Пиши кратко и практично.
+Важно:
+- Используй данные из профиля, целей (targets) и списка еды. Ничего не выдумывай.
+- Дай явный статус по микроэлементам: железо, цинк, магний, йод, селен, витамин B12, кальций, антиоксиданты, омега-3.
+  Статусы: дефицит / недобор / норма / хорошо закрыто / избыток (если уместно).
+- Если в totals есть ключ "targets", сравни фактические итоги с целями:
+  * укажи 1–2 главных отклонения (недобор/перебор) как приоритет.
+  * советы должны прямо закрывать эти отклонения.
+- Пиши по-русски, дружелюбно, без лекций и без медицинских диагнозов.
+- Добавляй «картинки» в тексте: используй эмодзи в начале headline и пунктов (✅🛠📌⚠️🍽️🎯).
+- Советы должны быть конкретными и выполнимыми завтра.
 
-Профиль:
+Профиль (может быть неполный):
 {json.dumps(profile_hint, ensure_ascii=False)}
 
 День: {day}
 
-Еда:
+Съедено (список):
 {json.dumps(items, ensure_ascii=False)}
 
-Итоги:
+Итоги (включая targets, если есть):
 {json.dumps(totals, ensure_ascii=False)}
+
+Требования к ответу:
+- Верни JSON строго по схеме.
+- headline: 1 короткая строка с главным выводом + эмодзи.
+- good/improve/plan/warnings: короткие пункты (до ~12 слов), каждый с эмодзи в начале.
+- Если данных мало или цели не заданы — скажи это и дай 1–2 универсальных совета.
 """.strip()
 
     resp = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_schema", "json_schema": _analysis_json_schema_ru()},
-        temperature=0.4
-    )
-    return json.loads(resp.choices[0].message.content)
-
-
-def _weekly_analysis_json_schema_ru():
-    # Same structure as daily, different name for clarity in logs
-    js = _analysis_json_schema_ru()
-    js["name"] = "weekly_analysis_ru"
-    return js
-
-
-def ai_weekly_analysis_ru(*, profile_hint: dict, start_date: str, end_date: str, days_logged: int, totals: dict, items: list[dict]) -> dict:
-    """
-    totals must already include computed numbers. Do NOT recompute macros.
-    Suggested totals shape:
-      {
-        "total": {"calories":..,"protein":..,"fat":..,"carbs":..,"fiber":..,"net_carbs":..},
-        "avg":   {"calories":..,"protein":..,"fat":..,"carbs":..,"fiber":..,"net_carbs":..},
-        "targets": {...}  # optional
-      }
-    items: list of eaten items for the period (can include "date" and "meal").
-    """
-    # Keep the prompt short-ish: the schema forces micronutrients block to exist.
-    prompt = f"""
-Ты — нутри-ассистент и анализируешь питание за период (неделя/несколько дней).
-
-ВАЖНО:
-- НЕ считай калории и БЖУ: используй готовые totals.
-- Сделай выводы по регулярности: где провалы по белку/клетчатке/овощам, где избыток ультра-обработанного.
-- Дай статус по каждому микроэлементу (обязательно все 9):
-  железо, цинк, магний, йод, селен, витамин B12, кальций, антиоксиданты, омега‑3.
-- Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
-- Учитывай ингибиторы и синергисты (например: витамин C↔железо; кальций↔железо; фитаты↔цинк и т.д.), но без лекций.
-- Пиши практично: что сделать на следующей неделе, 3–6 пунктов.
-- Верни JSON строго по схеме.
-
-Профиль:
-{json.dumps(profile_hint, ensure_ascii=False)}
-
-Период: {start_date} — {end_date} (дней с логами: {days_logged})
-
-Еда (список):
-{json.dumps(items, ensure_ascii=False)}
-
-Итоги и средние (включая targets, если есть):
-{json.dumps(totals, ensure_ascii=False)}
-""".strip()
-
-    resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_schema", "json_schema": _weekly_analysis_json_schema_ru()},
         temperature=0.4,
     )
     return json.loads(resp.choices[0].message.content)
@@ -572,177 +531,41 @@ def _case_plan_json_schema_ru():
     }
 
 
-def _case_extract_json_schema_ru():
-    """
-    Schema for *extracting* case inputs only.
-    We keep this separate so the model can't "helpfully" recalculate numbers.
-    """
-    return {
-        "name": "case_extract_ru",
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "sex": {"type": "string", "enum": ["male", "female", "unknown"]},
-                "age": {"type": ["number", "null"]},
-                "height_cm": {"type": ["number", "null"]},
-                "weight_kg": {"type": ["number", "null"]},
-                "activity": {"type": "string"},
-                "goal": {"type": "string"},
-                "preferences": {"type": "array", "items": {"type": "string"}},
-                "restrictions": {"type": "array", "items": {"type": "string"}},
-                "notes": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["sex", "age", "height_cm", "weight_kg", "activity", "goal", "preferences", "restrictions", "notes"],
-        },
-    }
-
-
-def _menu_only_json_schema_ru():
-    """Schema for generating only the 3-day menu (no calculations)."""
-    return {
-        "name": "case_menu_ru",
-        "schema": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "menu_3days": _case_plan_json_schema_ru()["schema"]["properties"]["menu_3days"],
-                "confidence": {"type": "number"},
-                "notes": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["menu_3days", "confidence", "notes"],
-        },
-    }
-
-
-def _normalize_activity_to_ka(activity: str) -> tuple[float | None, str]:
-    """
-    Return (KA, label). If unrecognized -> (None, original).
-    Accepts both RU/EN variants and your enum-like strings.
-    """
-    a = (activity or "").strip().lower()
-
-    # direct enum values
-    if a in ("sedentary", "сидячий", "сидячая"):
-        return 1.2, "сидячий"
-    if a in ("light", "легкая", "лёгкая"):
-        return 1.375, "лёгкая"
-    if a in ("moderate", "умеренная"):
-        return 1.55, "умеренная"
-    if a in ("high", "высокая"):
-        return 1.725, "высокая"
-
-    # fuzzy keywords
-    if any(k in a for k in ("сидяч", "малоподвиж", "sedent")):
-        return 1.2, "сидячий"
-    if any(k in a for k in ("лёг", "легк", "light")):
-        return 1.375, "лёгкая"
-    if any(k in a for k in ("умерен", "moderate")):
-        return 1.55, "умеренная"
-    if any(k in a for k in ("высок", "high", "интенсив", "спорт")):
-        return 1.725, "высокая"
-
-    return None, activity
-
-
-def _calc_case_numbers(*, sex: str, age, height_cm, weight_kg, activity: str, goal: str) -> dict:
-    """
-    STRICT math in Python (no LLM arithmetic):
-    - BMI
-    - BMR (Mifflin–St Jeor)
-    - KA
-    - TDEE
-    - Target kcal (15% deficit)
-    - Macros: protein 1.8 g/kg, fat 0.9 g/kg, carbs = kcal remainder
-    """
-    notes: list[str] = []
-
-    # Validate required inputs for math
-    if age is None or height_cm is None or weight_kg is None:
-        notes.append("Недостаточно данных для расчётов (возраст/рост/вес).")
-        return {
-            "bmi": None, "bmr": None, "ka": None, "tdee": None,
-            "target_kcal": None, "protein_g": None, "fat_g": None, "carbs_g": None,
-            "notes": notes,
-        }
-
-    age = float(age)
-    height_cm = float(height_cm)
-    weight_kg = float(weight_kg)
-
-    # BMI
-    height_m = height_cm / 100.0
-    bmi = weight_kg / (height_m ** 2)
-
-    # BMR: Mifflin–St Jeor
-    if sex == "male":
-        bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age + 5
-    else:
-        if sex == "unknown":
-            notes.append("Пол не распознан, BMR посчитан по формуле для женщин.")
-        bmr = 10 * weight_kg + 6.25 * height_cm - 5 * age - 161
-
-    # KA
-    ka, ka_label = _normalize_activity_to_ka(activity)
-    if ka is None:
-        notes.append(f"Активность не распознана: '{activity}'. KA не рассчитан.")
-        return {
-            "bmi": round(bmi, 1), "bmr": round(bmr), "ka": None, "tdee": None,
-            "target_kcal": None, "protein_g": None, "fat_g": None, "carbs_g": None,
-            "notes": notes,
-        }
-
-    # TDEE
-    tdee = bmr * ka
-
-    # Target kcal: 15% deficit for fat loss (default)
-    target_kcal = tdee * 0.85
-
-    # Safety floor for men only (as you had in the prompt)
-    if sex == "male" and target_kcal < 1000:
-        notes.append("Целевая калорийность поднята до 1000 ккал (правило для мужчин).")
-        target_kcal = 1000
-
-    # Macros
-    protein_g = 1.8 * weight_kg
-    fat_g = 0.9 * weight_kg
-
-    kcal_from_protein = protein_g * 4
-    kcal_from_fat = fat_g * 9
-    kcal_left = max(0.0, target_kcal - kcal_from_protein - kcal_from_fat)
-    carbs_g = kcal_left / 4
-
-    return {
-        "bmi": round(bmi, 1),
-        "bmr": round(bmr),
-        "ka": round(ka, 3),
-        "tdee": round(tdee),
-        "target_kcal": round(target_kcal),
-        "protein_g": round(protein_g),
-        "fat_g": round(fat_g),
-        "carbs_g": round(carbs_g),
-        "notes": notes,
-    }
-
-
 def ai_case_plan_ru(*, profile_hint: dict, case_text: str) -> dict:
-    """
-    Case workflow:
-    1) LLM extracts inputs only (JSON).
-    2) Python computes all numbers (no LLM arithmetic).
-    3) LLM generates only the 3-day menu using the computed targets.
-    4) We assemble final response matching _case_plan_json_schema_ru().
-    """
-    # 1) Extract inputs (LLM)
-    extract_prompt = f"""
-Ты — нутри-ассистент. Твоя задача: извлечь данные из кейса и вернуть ТОЛЬКО JSON по схеме.
-НЕ ДЕЛАЙ расчётов. НЕ ПИШИ меню.
-
+    prompt = f"""
+Ты — нутри-ассистент. По описанию кейса нужно:
+1) Извлечь: пол, возраст, рост, вес, активность, цель, предпочтения и ограничения.
+Извлеки данные из текста и верни ТОЛЬКО валидный JSON без пояснений.
+Схема:
+{
+  "sex": "female" | "male",
+  "age": integer,
+  "height_cm": integer,
+  "weight_kg": number,
+  "activity": "sedentary" | "light" | "moderate" | "high"
+}
 Правила:
-- age: брать только рядом со словами "возраст" или "лет"
-- height_cm: брать только рядом со словами "рост" или "см"
-- weight_kg: брать только рядом со словами "вес" или "кг"
-- Если не уверен — ставь null и объясни в notes.
+- age: искать только рядом со словами "возраст" или "лет"
+- height_cm: только рядом со словами "рост" или "см"
+- weight_kg: только рядом со словами "вес" или "кг"
+Если значение не найдено уверенно — ставь null.
+В ответе напиши все извлеченные данные
+2) Рассчитать:
+   - ИМТ = вес(кг) / (рост(м)^2)
+   - ВОО (BMR) по Mifflin–St Jeor:
+       муж: 10*вес + 6.25*рост - 5*возраст + 5
+       жен: 10*вес + 6.25*рост - 5*возраст - 161
+   - КА: сидячий=1.2, лёгкая=1.375, умеренная=1.55, высокая=1.725
+   - СПК (TDEE) = BMR * КА
+   - Целевая калорийность: для "снижения жира" возьми дефицит 15% (TDEE*0.85), но не ниже 1000 ккал для мужчин, если нет иных данных.
+   - БЖУ: белок 1.8 г/кг; жир 0.9 г/кг; углеводы = остаток по калориям.
+3) Составить рацион на 3 дня (завтрак/обед/ужин/перекус), учитывая предпочтения и ограничения.
+Важно:
+- Ничего не выдумывай: если данных нет, ставь null и добавляй пояснение в notes.
+- Пиши пункты меню конкретно: продукты + примерные порции (в граммах/шт), без "магии".
+- Пиши так же калорийность блюд и процент от рекомендованной суточной калорийности
+- напиши подробно расчет ВОО, это обязательно, распиши подробно
+- Ответ строго JSON по схеме.
 
 Профиль (может быть неполный, используй только если релевантно):
 {json.dumps(profile_hint, ensure_ascii=False)}
@@ -751,83 +574,87 @@ def ai_case_plan_ru(*, profile_hint: dict, case_text: str) -> dict:
 {case_text}
 """.strip()
 
-    extract_resp = client.chat.completions.create(
+    resp = client.chat.completions.create(
         model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": extract_prompt}],
-        response_format={"type": "json_schema", "json_schema": _case_extract_json_schema_ru()},
-        temperature=0.0,
-    )
-    extracted = json.loads(extract_resp.choices[0].message.content)
-
-    # 2) Compute numbers in Python (truth)
-    calculations = _calc_case_numbers(
-        sex=extracted.get("sex", "unknown"),
-        age=extracted.get("age"),
-        height_cm=extracted.get("height_cm"),
-        weight_kg=extracted.get("weight_kg"),
-        activity=extracted.get("activity", ""),
-        goal=extracted.get("goal", ""),
-    )
-
-    # 3) Generate menu only (LLM)
-    menu_prompt = f"""
-Ты — нутри-ассистент. Составь рацион на 3 дня (завтрак/перекус/обед/перекус/ужин).
-ВАЖНО:
-- НЕ ПЕРЕСЧИТЫВАЙ BMR/TDEE/калории/БЖУ. Используй только переданные цифры.
-- Пиши конкретно: продукты + порции (в граммах/шт).
-- Для каждого приёма пищи укажи примерные ккал и % от target_kcal.
-- Учитывай preferences/restrictions.
-- Если данных не хватает, не выдумывай, добавь в notes.
-
-Исходные данные:
-{json.dumps(extracted, ensure_ascii=False)}
-
-Готовые расчёты (истина):
-{json.dumps(calculations, ensure_ascii=False)}
-""".strip()
-
-    menu_resp = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[{"role": "user", "content": menu_prompt}],
-        response_format={"type": "json_schema", "json_schema": _menu_only_json_schema_ru()},
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": _case_plan_json_schema_ru()},
         temperature=0.3,
     )
-    menu_data = json.loads(menu_resp.choices[0].message.content)
+    return json.loads(resp.choices[0].message.content)
 
-    # 4) Assemble final object
-    final_notes = []
-    final_notes.extend(extracted.get("notes", []))
-    final_notes.extend(calculations.get("notes", []))
-    final_notes.extend(menu_data.get("notes", []))
 
-    # ensure extracted has required fields present per case_plan schema
-    extracted.setdefault("preferences", [])
-    extracted.setdefault("restrictions", [])
-    extracted.setdefault("goal", extracted.get("goal") or "")
-    extracted.setdefault("activity", extracted.get("activity") or "")
-
+def _weekly_analysis_json_schema_ru():
     return {
-        "extracted": {
-            "sex": extracted.get("sex", "unknown"),
-            "age": extracted.get("age"),
-            "height_cm": extracted.get("height_cm"),
-            "weight_kg": extracted.get("weight_kg"),
-            "activity": extracted.get("activity", ""),
-            "goal": extracted.get("goal", ""),
-            "preferences": extracted.get("preferences", []),
-            "restrictions": extracted.get("restrictions", []),
+        "name": "weekly_analysis_ru",
+        "schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "headline": {"type": "string"},
+                "micronutrients": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "iron": {"type": "string"},
+                        "zinc": {"type": "string"},
+                        "magnesium": {"type": "string"},
+                        "iodine": {"type": "string"},
+                        "selenium": {"type": "string"},
+                        "vitamin_b12": {"type": "string"},
+                        "calcium": {"type": "string"},
+                        "antioxidants": {"type": "string"},
+                        "omega_3": {"type": "string"},
+                    },
+                    "required": [
+                        "iron","zinc","magnesium","iodine","selenium",
+                        "vitamin_b12","calcium","antioxidants","omega_3"
+                    ],
+                },
+                "good": {"type": "array", "items": {"type": "string"}},
+                "improve": {"type": "array", "items": {"type": "string"}},
+                "plan": {"type": "array", "items": {"type": "string"}},
+                "warnings": {"type": "array", "items": {"type": "string"}},
+                "confidence": {"type": "number"},
+            },
+            "required": ["headline","micronutrients","good","improve","plan","warnings","confidence"],
         },
-        "calculations": {
-            "bmi": calculations.get("bmi"),
-            "bmr": calculations.get("bmr"),
-            "ka": calculations.get("ka"),
-            "tdee": calculations.get("tdee"),
-            "target_kcal": calculations.get("target_kcal"),
-            "protein_g": calculations.get("protein_g"),
-            "fat_g": calculations.get("fat_g"),
-            "carbs_g": calculations.get("carbs_g"),
-            "notes": final_notes,
-        },
-        "menu_3days": menu_data.get("menu_3days", []),
-        "confidence": float(menu_data.get("confidence", 0.7)),
     }
+
+
+def ai_weekly_analysis_ru(*, profile_hint: dict, period_label: str, totals: dict, food_examples: list[dict] | None = None) -> dict:
+    if food_examples is None:
+        food_examples = []
+    prompt = f"""
+Ты — нутри-ассистент и анализируешь питание за неделю.
+
+ВАЖНО:
+- НЕ пересчитывай калории/БЖУ. Используй totals как истину.
+- Дай явный статус по микроэлементам: железо, цинк, магний, йод, селен, витамин B12, кальций, антиоксиданты, омега-3.
+  Статусы: дефицит / недобор / норма / хорошо закрыто / избыток.
+- Если данных по продуктам мало, честно укажи это, но micronutrients всё равно заполни.
+
+Профиль:
+{json.dumps(profile_hint, ensure_ascii=False)}
+
+Период: {period_label}
+
+Примеры еды (может быть пусто):
+{json.dumps(food_examples, ensure_ascii=False)}
+
+Итоги недели (включая среднее за день и targets, если есть):
+{json.dumps(totals, ensure_ascii=False)}
+
+Требования:
+- Верни JSON строго по схеме.
+- headline: 1 строка + эмодзи.
+- good/improve/plan/warnings: короткие пункты с эмодзи (✅🛠📌⚠️).
+""".strip()
+
+    resp = client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_schema", "json_schema": _weekly_analysis_json_schema_ru()},
+        temperature=0.4,
+    )
+    return json.loads(resp.choices[0].message.content)
+
