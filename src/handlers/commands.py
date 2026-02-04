@@ -4,7 +4,7 @@ from __future__ import annotations
 from telegram import Update
 from telegram.ext import ContextTypes
 
-from src.ai import ai_estimate, ai_daily_analysis_ru, ai_case_plan_ru, ai_weekly_analysis_ru
+from src.ai import ai_estimate, ai_daily_analysis_ru, ai_case_plan_ru
 from src.db import ensure_user, get_targets
 from src.handlers.messages import unit_label, meal_label
 from src.i18n.lang import get_user_language, _normalize_lang, SUPPORTED_LANGS, set_user_language
@@ -146,10 +146,33 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     net = max(float(carbs or 0.0) - float(fiber or 0.0), 0.0)
 
+
+    # цели (для контроля: показываем "из X")
+    targets = get_targets(user.id)  # dict | None
+    t_kcal = float(targets.get("calories") or 0) if targets else 0.0
+    t_p    = float(targets.get("protein") or 0) if targets else 0.0
+    t_f    = float(targets.get("fat") or 0) if targets else 0.0
+    t_c    = float(targets.get("carbs") or 0) if targets else 0.0
+    t_nc   = float(targets.get("net_carbs") or 0) if targets else 0.0
+
+    # helper: progress line with fallback if i18n key missing
+    def _progress(label_ru: str, label_pt: str, value: str, target: float, unit_ru: str, unit_pt: str) -> str:
+        label = label_pt if lang == "pt" else label_ru
+        unit = unit_pt if lang == "pt" else unit_ru
+
+        key = "today.progress_line"
+        rendered = t(key, lang, label=label, value=value, target=f"{target:.0f}", unit=unit)
+        if rendered == key:
+            # fallback (если ключа нет в переводах)
+            if lang == "pt":
+                return f"{label}: {value} {unit} (de {target:.0f} {unit})".strip()
+            return f"{label}: {value} {unit} (из {target:.0f} {unit})".strip()
+        return rendered
+
+    # --- итоги ---
+    lines.append(t("today.totals_title", lang))
     lines.append(
-        t("today.totals_title", lang)
-        + "\n"
-        + t(
+        t(
             "today.totals_lines",
             lang,
             kcal=f"{float(calories):.0f}",
@@ -160,6 +183,21 @@ async def cmd_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     )
 
+    # --- прогресс vs цель (для контроля) ---
+    if targets:
+        lines.append("")  # пустая строка
+        lines.append("🎯 Прогресс vs цель:" if lang != "pt" else "🎯 Progresso vs meta:")
+        if t_kcal > 0:
+            # ккал без единицы
+            lines.append(_progress("Ккал", "Kcal", f"{float(calories):.0f}", t_kcal, "", ""))
+        if t_p > 0:
+            lines.append(_progress("Белки", "Proteínas", f"{float(protein):.1f}", t_p, "г", "g"))
+        if t_f > 0:
+            lines.append(_progress("Жиры", "Gorduras", f"{float(fat):.1f}", t_f, "г", "g"))
+        if t_c > 0:
+            lines.append(_progress("Углеводы", "Carboidratos", f"{float(carbs):.1f}", t_c, "г", "g"))
+        if t_nc > 0:
+            lines.append(_progress("Чистые", "Carboidratos líquidos", f"{float(net):.1f}", t_nc, "г", "g"))
     await update.message.reply_text("\n".join(lines))
 
 
@@ -210,102 +248,26 @@ async def cmd_week(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     def _line(label_key: str, total: str, avg: str) -> str:
         return t("week.line", lang, label=t(label_key, lang), total=total, avg=avg)
 
-    # базовый текстовый summary (читаемый формат, построчно)
-    lines = []
-    lines.append(t("week.title\n", lang))
-    lines.append(f"📅 Дней с записями: {days}\n")
-    lines.append("\n")
-    lines.append(f"🔥 Ккал: {float(calories):.0f} (ср {float(calories)/days:.0f}/день)\n")
-    lines.append(f"🥩 Белки: {float(protein):.1f} г (ср {float(protein)/days:.1f}/день)\n")
-    lines.append(f"🧈 Жиры: {float(fat):.1f} г (ср {float(fat)/days:.1f}/день)\n")
-    lines.append(f"🥔 Углеводы: {float(carbs):.1f} г (ср {float(carbs)/days:.1f}/день)\n")
-    lines.append(f"🍬 Чистые: {float(net):.1f} г (ср {float(net)/days:.1f}/день)")
-    lines.append(f"🥬 Клетчатка: {float(fiber):.1f} г (ср {float(fiber)/days:.1f}/день)\n")
+    lines = [
+        t("week.title", lang),
+        "",
+        t("week.days", lang, days=days),
+        "",
+        _line("macro.kcal", f"{float(calories):.0f}", f"{float(calories)/days:.1f}"),
+        _line("macro.protein", f"{float(protein):.1f} g", f"{float(protein)/days:.1f} g"),
+        _line("macro.fat", f"{float(fat):.1f} g", f"{float(fat)/days:.1f} g"),
+        _line("macro.carbs", f"{float(carbs):.1f} g", f"{float(carbs)/days:.1f} g"),
+        t(
+            "week.line",
+            lang,
+            label=t("week.net", lang),
+            total=f"{float(net):.1f} g",
+            avg=f"{float(net)/days:.1f} g",
+        ),
+    ]
 
-    # --- AI-недельный анализ
-    # (как дневной, с микроэлементами) ---
-    try:
-        profile_hint = build_profile_hint({"user_id": user.id, "language": lang})
-    except Exception:
-        profile_hint = {}
+    await update.message.reply_text("\n".join(lines))
 
-    targets = None
-    with db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT kcal, protein, fat, carbs, fiber, diet FROM targets WHERE user_id=%s",
-            (user.id,),
-        )
-        row = cur.fetchone()
-        if row:
-            targets = {
-                "kcal": float(row[0]) if row[0] is not None else None,
-                "protein": float(row[1]) if row[1] is not None else None,
-                "fat": float(row[2]) if row[2] is not None else None,
-                "carbs": float(row[3]) if row[3] is not None else None,
-                "fiber": float(row[4]) if row[4] is not None else None,
-                "diet": row[5],
-            }
-
-    totals_payload = {
-        "days_with_logs": days,
-        "totals": {
-            "calories": float(calories),
-            "protein": float(protein),
-            "fat": float(fat),
-            "carbs": float(carbs),
-            "fiber": float(fiber),
-            "net_carbs": float(net),
-        },
-        "avg_per_day": {
-            "calories": float(calories)/days,
-            "protein": float(protein)/days,
-            "fat": float(fat)/days,
-            "carbs": float(carbs)/days,
-            "fiber": float(fiber)/days,
-            "net_carbs": float(net)/days,
-        },
-    }
-    if targets:
-        totals_payload["targets"] = targets
-
-    analysis = None
-    try:
-        analysis = ai_weekly_analysis_ru(profile_hint=profile_hint, period_label=t("week.title", lang), totals=totals_payload, food_examples=[])
-    except Exception:
-        analysis = None
-
-    if isinstance(analysis, dict):
-        lines.append("\n")
-        lines.append(analysis.get("headline", "🗓️ Анализ недели\n"))
-        lines.append("\n")
-        micro = analysis.get("micronutrients")
-        if isinstance(micro, dict) and micro:
-            lines.append("")
-            lines.append("🧬 Микроэлементы:\n")
-            order = [
-                ("iron", "🩸 Железо"),
-                ("zinc", "🧷 Цинк"),
-                ("magnesium", "🧲 Магний"),
-                ("iodine", "🧂 Йод"),
-                ("selenium", "🌰 Селен"),
-                ("vitamin_b12", "💊 Витамин B12"),
-                ("calcium", "🥛 Кальций"),
-                ("antioxidants", "🍓 Антиоксиданты"),
-                ("omega_3", "🐟 Омега-3"),
-            ]
-            for k, label in order:
-                v = micro.get(k) or "—"
-                lines.append(f"{label}: {v}\n")
-
-        for key, title in [("good", "✅ Что хорошо:"), ("improve", "🛠 Что улучшить:"), ("plan", "📌 План:"), ("warnings", "⚠️ Предупреждения:")]:
-            arr = analysis.get(key) or []
-            if arr:
-                lines.append("\n")
-                lines.append(f"{title}\n")
-                lines.extend([f"• {x}\n" for x in arr])
-
-    await update.message.reply_text("".join(lines))
 
 
 async def cmd_profile(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
